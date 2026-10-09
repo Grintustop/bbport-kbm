@@ -3,9 +3,11 @@
 **English** · [Русский](README.ru.md)
 
 An add-on for the experimental native Bloodborne port
-[**Bloodborne PC / bbport**](https://github.com/DarkIzuku/bloodborne_pc) (Windows build
-“Bloodborne PC Offline v0.1”). The port only has a gamepad and a fixed keyboard fallback
-(no mouse, no rebinding). This add-on adds:
+[**Bloodborne PC / bbport**](https://github.com/deadinside28/bloodborne_pc) by deadinside28
+(tested with the Windows build “Bloodborne PC Offline v0.1”, e.g. from the
+[DarkIzuku/bloodborne_pc](https://github.com/DarkIzuku/bloodborne_pc) fork's Actions).
+The port only has a gamepad and a fixed keyboard fallback (no mouse, no rebinding).
+This add-on adds:
 
 - **Mouse camera** (mouse → right stick, same model as shadPS4's `mouse_to_joystick`).
 - **Fully rebindable keyboard and mouse buttons**, including combinations (`lshift,leftbutton`),

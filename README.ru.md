@@ -3,9 +3,11 @@
 [English](README.md) · **Русский**
 
 Дополнение к экспериментальному нативному порту
-[**Bloodborne PC / bbport**](https://github.com/DarkIzuku/bloodborne_pc) (сборка для Windows
-«Bloodborne PC Offline v0.1»). В самом порте есть только геймпад и жёстко заданная клавиатура:
-мыши и переназначения клавиш нет. Дополнение добавляет:
+[**Bloodborne PC / bbport**](https://github.com/deadinside28/bloodborne_pc) от deadinside28
+(проверено со сборкой для Windows «Bloodborne PC Offline v0.1», например из Actions форка
+[DarkIzuku/bloodborne_pc](https://github.com/DarkIzuku/bloodborne_pc)).
+В самом порте есть только геймпад и жёстко заданная клавиатура: мыши и переназначения клавиш нет.
+Дополнение добавляет:
 
 - **Камеру мышью** (мышь → правый стик, та же модель, что `mouse_to_joystick` в shadPS4).
 - **Полное переназначение клавиш и кнопок мыши**, в том числе комбинаций (`lshift,leftbutton`),
