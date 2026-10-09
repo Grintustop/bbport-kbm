@@ -72,9 +72,9 @@ Keys are matched by position (scancodes), so the keyboard layout (e.g. Russian) 
 ### Why the stick smoothing?
 
 With keys the stick direction jumps by 45° in one frame (W → W+A). A thumb cannot do that, and
-FromSoftware's engine (Bloodborne, also Dark Souls 3) reacts to such a jump while sprinting with a
-stumbling turn animation — on one side or both depending on the camera. The add-on turns the
-key-driven stick along its rim instead (45° in ~50 ms at the default). Reversals (W → S) still go
+FromSoftware's engine might reacts to such a jump while sprinting with a
+stumbling turn animation (I experienced this in Bloodborne and Dark Souls 3.) — on one side or both depending on the camera.
+The add-on turns the key-driven stick along its rim instead (45° in ~50 ms at the default). Reversals (W → S) still go
 through the centre at once.
 
 ### KeyTest.exe
