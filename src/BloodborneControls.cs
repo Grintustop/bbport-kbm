@@ -165,6 +165,12 @@ class ControlsForm : Form
         AddRow(table, L.T("Плавность поворота, мс на 90°", "Turn smoothing, ms per 90°"), smoothing, L.T("убирает спотыкание при W→W+A на бегу; 0 — мгновенно", "removes the stumble on W→W+A while sprinting; 0 = instant"));
 
         AddGroup(table, L.T("Мышь", "Mouse"));
+        string mode = MouseModeText();
+        if (mode != null)
+        {
+            table.Controls.Add(new Label { Text = mode, AutoSize = true, MaximumSize = new Size(660, 0), ForeColor = Color.FromArgb(40, 80, 140), Margin = new Padding(3, 0, 3, 6) });
+            table.SetColumnSpan(table.Controls[table.Controls.Count - 1], 3);
+        }
         mouseStick.DropDownStyle = ComboBoxStyle.DropDownList;
         mouseStick.Items.AddRange(new object[] { L.T("Не управляет стиком", "Not used"), L.T("Левый стик", "Left stick"), L.T("Правый стик (камера)", "Right stick (camera)") });
         mouseStick.Width = 190;
@@ -344,6 +350,35 @@ class ControlsForm : Form
     }
 
     static decimal Clamp(NumericUpDown n, decimal v) { return Math.Max(n.Minimum, Math.Min(n.Maximum, v)); }
+
+    // Ports from 0.4 have their own PC controls (bbport.ini pc_controls / mouse_camera, set in the
+    // port's launcher). The kbm layer then keeps the native mouse camera; describe what applies.
+    string MouseModeText()
+    {
+        string ini = Path.Combine(root, "bbport.ini");
+        if (!File.Exists(ini)) return null;
+        var values = new Dictionary<string, string>();
+        foreach (var raw in File.ReadAllLines(ini))
+        {
+            int eq = raw.IndexOf('=');
+            if (eq > 0 && !raw.TrimStart().StartsWith("#")) values[raw.Substring(0, eq).Trim()] = raw.Substring(eq + 1).Trim();
+        }
+        if (!values.ContainsKey("pc_controls")) return null; // v0.1: no PC controls in the runtime
+        bool pc = values["pc_controls"] != "0";
+        bool cam = pc && (!values.ContainsKey("mouse_camera") || values["mouse_camera"] != "0");
+        if (cam)
+            return L.T("PC-управление порта включено (лаунчер → Controls): камера мышью и курсор в меню — родные, " +
+                       "чувствительность задаётся в лаунчере порта, параметры ниже не используются. Клавиши и кнопки " +
+                       "мыши берутся из этой программы, привязки лаунчера порта в игре не действуют.",
+                       "The port's PC controls are on (launcher → Controls): the mouse camera and the menu pointer are " +
+                       "native, sensitivity is set in the port's launcher and the settings below are not used. Keys and " +
+                       "mouse buttons come from this program; the port launcher's bindings do not apply in the game.");
+        if (pc)
+            return L.T("PC-управление порта включено без камеры мышью: камера — по параметрам ниже, клавиши и кнопки мыши — из этой программы.",
+                       "The port's PC controls are on without the mouse camera: the camera uses the settings below, keys and mouse buttons come from this program.");
+        return L.T("PC-управление порта выключено: всё управление, включая камеру мышью по параметрам ниже, — из этой программы.",
+                   "The port's PC controls are off: all controls, including the mouse camera with the settings below, come from this program.");
+    }
 
     void ImportShad()
     {

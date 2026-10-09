@@ -1,27 +1,46 @@
-# bbport-kbm — keyboard & mouse for Bloodborne PC
+# bbport-kbm — shadPS4-style keyboard & mouse for Bloodborne PC
 
 **English** · [Русский](README.ru.md)
 
-An add-on for the experimental native Bloodborne port
-[**Bloodborne PC / bbport**](https://github.com/deadinside28/bloodborne_pc) by deadinside28
-(tested with the Windows build “Bloodborne PC Offline v0.1”, e.g. from the
-[DarkIzuku/bloodborne_pc](https://github.com/DarkIzuku/bloodborne_pc) fork's Actions).
-The port only has a gamepad and a fixed keyboard fallback (no mouse, no rebinding).
-This add-on adds:
+An alternative control layer for the native Bloodborne port
+[**Bloodborne PC / bbport**](https://github.com/deadinside28/bloodborne_pc) by deadinside28,
+Windows builds from the [DarkIzuku/bloodborne_pc](https://github.com/DarkIzuku/bloodborne_pc)
+fork's Actions. You map **PS4 buttons to keys**, exactly like shadPS4's keyboard config, instead
+of the port's action list:
 
-- **Mouse camera** (mouse → right stick, same model as shadPS4's `mouse_to_joystick`).
-- **Fully rebindable keyboard and mouse buttons**, including combinations (`lshift,leftbutton`),
-  mouse wheel and side buttons.
-- **shadPS4 config compatibility**: uses shadPS4's `input_config` format, so your existing
-  shadPS4 `default.ini` / `CUSA03173.ini` works as-is (one-click import).
-- **BloodborneControls.exe** — a bindings editor (English / Russian).
-- **Smooth stick turning for keys**: removes the stumble when you add A or D while sprinting
-  forward (see below).
-- **Touchpad fix for the v0.1 build**: the gesture menu and Personal Effects open again, from
-  keys, from Back on Xbox pads and from a real DualShock 4 touchpad (see below).
+- **shadPS4 input config**: the same `input_config` format and key names; your existing shadPS4
+  `default.ini` / `CUSA03173.ini` works as-is (one-click import).
+- **Any key or mouse button on any PS4 button**, combinations (`lshift,leftbutton`), mouse wheel
+  and side buttons, two bindings per button.
+- **BloodborneControls.exe**: a bindings editor — click a field, press a key (English / Russian).
+- **Mouse camera**: on v0.4 the port's native mouse camera and menu pointer are kept; otherwise
+  shadPS4's mouse-to-stick model.
+- **Smooth stick turning for keys** (no stumble when adding A/D while sprinting), circle or square
+  diagonals.
 - Real gamepads keep working; keyboard and mouse are merged into them.
 
 No game files and no files of the port are included.
+
+## Supported port builds
+
+| Port build | Camera | Notes |
+|---|---|---|
+| **v0.4** Windows (PC controls on in the launcher, default) | native mouse camera and menu pointer of the port | the port's own key bindings (*Controls*) are switched off while the layer runs; keys and mouse buttons come from `input_config` |
+| **v0.4** with PC controls off | mouse → right stick (`mouse_to_joystick`) | everything comes from `input_config` |
+| **v0.1** (“Bloodborne PC Offline v0.1”) | mouse → right stick | also fixes the touchpad (gestures, Personal Effects) of that build |
+
+The layer finds what it needs in the port's `bb-probe.exe` by its symbol names, so it adapts to
+the build it is installed in and leaves out what a build does not have.
+
+### Compared with the port's own PC controls (v0.4)
+
+| | port's PC controls | bbport-kbm |
+|---|---|---|
+| What you bind | 29 game actions (attack, strong attack + modifier, …) | PS4 buttons (R1, R2, ○, …), like a pad |
+| Editing | key names typed / captured per action in the launcher | click and press in BloodborneControls.exe, or a text file |
+| Config | `bbport.ini` `bind.*` | shadPS4 `input_config` (portable to/from shadPS4) |
+| Combinations | strong-attack modifier only | any 2–3 keys on any button |
+| Mouse camera, menu pointer | native | native (kept) |
 
 ## Install
 
@@ -32,17 +51,18 @@ No game files and no files of the port are included.
 5. Start the game from the launcher as usual.
 
 **Uninstall:** run `uninstall-kbm.bat` (restores the original `SDL3.dll`; your bindings stay in
-`input_config\`). To disable it for one run, set the environment variable `BB_KBM=0`.
+`input_config\`, the port's own bindings work again). To disable the layer for one run, set the
+environment variable `BB_KBM=0`.
 
 ## In game
 
 | Key | Action |
 |---|---|
-| **F7** | capture / release the mouse |
+| **F7** | capture / release the mouse (stick camera mode) |
 | **F8** | reload the bindings (edit them in BloodborneControls.exe while the game runs) |
 | **Insert** | the port's own menu — the mouse is released while it is open |
 
-The mouse is also released when the game window loses focus.
+The mouse is also released when the game window loses focus or a text box is open.
 
 ## Configuration
 
@@ -68,16 +88,18 @@ Extra options of this add-on (ignored by shadPS4):
 | `stick_shape` | `circle` | `circle`: W+A tilts the stick like a real thumb (≈ 0.71, 0.71). `square`: corners, like shadPS4. |
 | `mouse_poll_ms` | `33` | Mouse sampling period (shadPS4 uses 33 ms). |
 
+`mouse_to_joystick` and `mouse_movement_params` apply only when the port's native mouse camera is
+off; with it, sensitivity and inversion are set in the port's launcher.
 Hotkeys in `global.ini`: `hotkey_toggle_mouse_to_joystick` (F7), `hotkey_reload_inputs` (F8).
 Keys are matched by position (scancodes), so the keyboard layout (e.g. Russian) does not matter.
 
 ### Why the stick smoothing?
 
 With keys the stick direction jumps by 45° in one frame (W → W+A). A thumb cannot do that, and
-FromSoftware's engine might reacts to such a jump while sprinting with a
-stumbling turn animation (I experienced this in Bloodborne and Dark Souls 3.) — on one side or both depending on the camera.
-The add-on turns the key-driven stick along its rim instead (45° in ~50 ms at the default). Reversals (W → S) still go
-through the centre at once.
+FromSoftware's engine may react to such a jump while sprinting with a stumbling turn animation
+(I experienced this in Bloodborne and Dark Souls 3) — on one side or both depending on the camera.
+The add-on turns the key-driven stick along its rim instead (45° in ~50 ms at the default).
+Reversals (W → S) still go through the centre at once.
 
 ### Touchpad: gestures and Personal Effects
 
@@ -88,9 +110,10 @@ through the centre at once.
 
 The game accepts a touchpad press only when the touch looks like a DualShock 4 one: a new touch
 id (1–127) for every press and the time it has been held. The v0.1 runtime reports id 0 and no
-hold time, so the touchpad was ignored from every source (bbport fixed this later in
-`runtime_pad.c`, [deadinside28/bloodborne_pc#48](https://github.com/deadinside28/bloodborne_pc/issues/48)). On the v0.1 build the add-on wraps the runtime's pad read and fills
-these fields in; other builds are left alone (the function is matched by its bytes).
+hold time, so the touchpad was ignored from every source (bbport fixed this in 0.4,
+[deadinside28/bloodborne_pc#48](https://github.com/deadinside28/bloodborne_pc/issues/48)). On v0.1
+the add-on wraps the runtime's pad read and fills these fields in; on builds that have the fix it
+does nothing.
 
 ### KeyTest.exe
 
@@ -102,13 +125,16 @@ the keyboard drops when several are held).
 `out\SDL3.dll` is replaced by a small proxy; every SDL function is forwarded to the original
 (`out\SDL3_real.dll`) except the gamepad, keyboard-state, event and window calls that the port's
 runtime (`bb-probe.exe`) uses for the pad. The proxy adds a virtual “Keyboard & Mouse” gamepad
-fed from your bindings, hides the runtime's hard-coded keyboard fallback, and puts the window in
-SDL relative mouse mode while playing. While the port's overlay menu is open the runtime ignores
-the pad and the mouse is released (the menu flag is located by a byte signature of the v0.1 build;
-other builds fall back to toggling with Insert). Log: `logs\kbm-input.log`.
+fed from your bindings and hides the keyboard from the runtime's own key handling (v0.1's fixed
+layout, v0.4's `bind.*`). On v0.4 with PC controls, mouse button and wheel presses are kept from
+the runtime while the mouse is captured (they are yours), but mouse movement and menu clicks still
+reach it, so the native camera and pointer work. Without the native camera the proxy captures the
+mouse itself (SDL relative mode) and turns its movement into the right stick. The port's overlay
+menu and text prompts are found through the runtime's symbols; while they are open the mouse is
+released. Log: `logs\kbm-input.log`.
 
-The `.def` file of the proxy is generated from the exports of the port's own SDL3.dll, so a
-port update that ships a different SDL3 needs a rebuild.
+The `.def` file of the proxy is generated from the exports of the port's own SDL3.dll (the same in
+v0.1 and v0.4), so a port update that ships a different SDL3 needs a rebuild.
 
 ## Build
 

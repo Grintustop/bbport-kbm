@@ -8,10 +8,13 @@
  *
  * - With no real gamepad connected the runtime opens the virtual one ("Keyboard & Mouse").
  * - With a real gamepad connected the keyboard and mouse are merged into it.
- * - The runtime's own hard-coded keyboard fallback is hidden (it only sees F9 for pad recording).
- * - The mouse is captured (relative mode) while the game window has focus and the bbport
- *   overlay menu (Insert / L3+R3) is closed. F7 toggles the capture, F8 reloads the config
+ * - The runtime's own keyboard handling is hidden (v0.1's fixed layout, v0.4's bind.* keys; it
+ *   only sees F9 for pad recording). On v0.4 with PC controls the mouse buttons and the wheel are
+ *   kept from it while playing, and its native mouse camera and menu pointer stay in place.
+ * - Otherwise the mouse is captured (relative mode) while the game window has focus and the
+ *   bbport overlay menu (Insert / L3+R3) is closed. F7 toggles the capture, F8 reloads the config
  *   (hotkey_toggle_mouse_to_joystick / hotkey_reload_inputs in global.ini).
+ * - The runtime is recognised by its COFF symbols (v0.1, v0.4 and later builds).
  * - Keys move a stick along its rim (stick_smoothing_ms) instead of jumping: FromSoftware games
  *   play a stumbling turn when the stick direction jumps by 45 degrees while sprinting.
  * - BB_KBM=0 in the environment turns all of this off (pure pass-through).
@@ -73,6 +76,11 @@ static const bool *(*r_GetKeyboardState)(int *);
 static bool (*r_PollEvent)(SDL_Event *);
 static SDL_Window *(*r_CreateWindowWithProperties)(SDL_PropertiesID);
 static bool (*r_SetWindowRelativeMouseMode)(SDL_Window *, bool);
+static bool (*r_GetWindowRelativeMouseMode)(SDL_Window *);
+typedef struct SDL_GUID { uint8_t data[16]; } SDL_GUID;
+static const char *(*r_GetGamepadNameForID)(SDL_JoystickID);
+static SDL_GUID (*r_GetGamepadGUIDForID)(SDL_JoystickID);
+static SDL_JoystickID (*r_GetGamepadID)(SDL_Gamepad *);
 static void *(*r_malloc)(size_t);
 static void (*r_free)(void *);
 
@@ -119,7 +127,13 @@ static FILE *log_file;
 static SDL_Window *game_window;
 static volatile bool focused = true, capture_enabled = true, captured, menu_guess;
 static volatile const uint8_t *menu_open_flag; /* BbOverlay::menu_open inside bb-probe.exe */
-static bool mouse_down[8];
+static volatile const uint8_t *prompt_flag;    /* BbOverlay::prompt_active (v0.4+): text box open */
+/* v0.4+ runtimes have their own PC controls (bbport.ini pc_controls=1). Then the runtime's key
+ * bindings are hidden from it, mouse buttons and the wheel are taken from it while the mouse is
+ * captured, and with its mouse_camera=1 the runtime keeps its native mouse camera and owns the
+ * capture (the menus keep its mouse pointer). */
+static bool runtime_has_pc_controls, pc_controls_mode, native_mouse_camera;
+static bool mouse_down[8], down_in_game[8]; /* down_in_game: pressed while the mouse was captured */
 static float acc_dx, acc_dy;
 static volatile int wheel_pending[4];
 static double wheel_until[4];
@@ -372,11 +386,56 @@ static void load_config(void) {
     free(c);
 }
 
+/* bbport.ini value of `key` (0/1), or `fallback` when missing. BB_CONFIG overrides the path. */
+static int ini_flag(const char *key, int fallback) {
+    wchar_t path[MAX_PATH];
+    DWORD n = GetEnvironmentVariableW(L"BB_CONFIG", path, MAX_PATH);
+    if (!n || n >= MAX_PATH) swprintf(path, MAX_PATH, L"%ls\\bbport.ini", root_dir);
+    FILE *f = _wfopen(path, L"rb");
+    if (!f) return fallback;
+    char line[256];
+    size_t len = strlen(key);
+    int value = fallback;
+    while (fgets(line, sizeof line, f)) {
+        char *s = trim(line);
+        if (!strncmp(s, key, len) && (s[len] == '=' || isspace((unsigned char)s[len]))) {
+            char *eq = strchr(s, '=');
+            if (eq) value = atoi(trim(eq + 1)) != 0;
+        }
+    }
+    fclose(f);
+    return value;
+}
+
+static void detect_pc_controls(void) {
+    pc_controls_mode = runtime_has_pc_controls && ini_flag("pc_controls", 1);
+    native_mouse_camera = pc_controls_mode && ini_flag("mouse_camera", 1);
+    if (!runtime_has_pc_controls) return;
+    if (!pc_controls_mode)
+        logf_("Runtime PC controls are off: this layer drives the keyboard and the mouse "
+              "(mouse_to_joystick camera)");
+    else if (native_mouse_camera)
+        logf_("Runtime PC controls with mouse camera: keys and mouse buttons come from input_config, "
+              "the camera and the menu pointer stay native (mouse_to_joystick is ignored)");
+    else
+        logf_("Runtime PC controls without mouse camera: keys and mouse buttons come from input_config, "
+              "the mouse camera from mouse_to_joystick");
+}
+
 /* ---- input sampling ------------------------------------------------------------------------ */
 
 static bool menu_open(void) {
-    if (menu_open_flag) return *menu_open_flag != 0;
+    if (menu_open_flag) return *menu_open_flag != 0 || (prompt_flag && *prompt_flag != 0);
     return menu_guess;
+}
+
+/* Mouse buttons and the wheel count while the mouse is captured: by this layer, or by the runtime's
+ * native mouse camera (its relative mode is off in menus, where the mouse is a pointer). */
+static bool mouse_in_game(void) {
+    if (native_mouse_camera)
+        return focused && !menu_open() && game_window && r_GetWindowRelativeMouseMode &&
+               r_GetWindowRelativeMouseMode(game_window);
+    return captured;
 }
 
 /* The runtime keeps the high byte (+128) of a stick axis, so v * 256 gives the PS4 byte 128 + v:
@@ -399,7 +458,7 @@ static void update_snapshot(void) {
     double t = now_ms();
     if (t - snap_time < 1.0) return;
     snap_time = t;
-    if (reload_requested) { reload_requested = false; load_config(); }
+    if (reload_requested) { reload_requested = false; load_config(); detect_pc_controls(); }
 
     Snapshot s = {0};
     bool active = focused && !menu_open();
@@ -409,9 +468,10 @@ static void update_snapshot(void) {
         if (ks) for (int i = 0; i < SC_COUNT; i++) pressed[i] = ks[i];
     }
 
+    bool mouse_on = active && mouse_in_game();
     EnterCriticalSection(&lock);
-    if (active && captured) {
-        for (int i = 1; i <= 5; i++) pressed[IN_MOUSE + i] = mouse_down[i];
+    if (mouse_on) {
+        for (int i = 1; i <= 5; i++) pressed[IN_MOUSE + i] = mouse_down[i] && down_in_game[i];
         for (int i = 0; i < 4; i++) {
             if (wheel_pending[i]) { wheel_pending[i] = 0; wheel_until[i] = t + 33.0; }
             pressed[IN_WHEEL_UP + i] = t < wheel_until[i];
@@ -422,7 +482,7 @@ static void update_snapshot(void) {
         float dx = acc_dx, dy = acc_dy;
         acc_dx = acc_dy = 0;
         mouse_sample_time = t;
-        if ((dx != 0 || dy != 0) && active && captured) {
+        if ((dx != 0 || dy != 0) && active && captured && !native_mouse_camera) {
             float speed = sqrtf(dx * dx + dy * dy) * cfg.speed + cfg.speed_offset * 128.0f;
             float lo = cfg.deadzone_offset * 128.0f;
             if (speed < lo) speed = lo;
@@ -508,7 +568,7 @@ static void update_snapshot(void) {
 
 /* Window thread (inside SDL_PollEvent): mouse capture follows focus, the overlay menu and F7. */
 static void update_capture(void) {
-    if (!game_window || !r_SetWindowRelativeMouseMode) return;
+    if (!game_window || !r_SetWindowRelativeMouseMode || native_mouse_camera) return; /* runtime owns it */
     bool want = (cfg.uses_mouse || cfg.mouse_stick) && capture_enabled && focused && !menu_open();
     if (want != captured) {
         if (r_SetWindowRelativeMouseMode(game_window, want) || !want) {
@@ -553,8 +613,12 @@ static void handle_event(const SDL_Event *e) {
     case EV_MOUSE_BUTTON_UP: {
         uint8_t b = p[24];
         if (b < 8) {
+            bool down = e->type == EV_MOUSE_BUTTON_DOWN;
+            /* a click in a menu that closes it does not turn into an attack */
+            bool in_game = down && mouse_in_game();
             EnterCriticalSection(&lock);
-            mouse_down[b] = e->type == EV_MOUSE_BUTTON_DOWN;
+            mouse_down[b] = down;
+            down_in_game[b] = in_game;
             LeaveCriticalSection(&lock);
         }
         break;
@@ -562,7 +626,7 @@ static void handle_event(const SDL_Event *e) {
     case EV_MOUSE_WHEEL: {
         float x = *(const float *)(p + 24), y = *(const float *)(p + 28);
         if (*(const uint32_t *)(p + 32) == 1) { x = -x; y = -y; } /* SDL_MOUSEWHEEL_FLIPPED */
-        if (captured) {
+        if (mouse_in_game()) {
             if (y > 0) wheel_pending[0] = 1;
             if (y < 0) wheel_pending[1] = 1;
             if (x < 0) wheel_pending[2] = 1;
@@ -633,6 +697,29 @@ EXPORT const char *SDL_GetGamepadName(SDL_Gamepad *g) {
     return r_GetGamepadName(g);
 }
 
+/* v0.4+ picks the pad by name / GUID (BB_GAMEPAD, the launcher's controller choice) before
+ * opening it, and compares the name as a string: the virtual pad must have both. */
+EXPORT const char *SDL_GetGamepadNameForID(SDL_JoystickID id) {
+    ENSURE();
+    if (enabled && id == FAKE_ID) return "Keyboard & Mouse (bbport kbm)";
+    return r_GetGamepadNameForID(id);
+}
+
+EXPORT SDL_GUID SDL_GetGamepadGUIDForID(SDL_JoystickID id) {
+    ENSURE();
+    if (enabled && id == FAKE_ID) {
+        SDL_GUID g = {{'b', 'b', 'p', 'o', 'r', 't', '-', 'k', 'b', 'm', 0, 0, 0, 0, 0, 1}};
+        return g;
+    }
+    return r_GetGamepadGUIDForID(id);
+}
+
+EXPORT SDL_JoystickID SDL_GetGamepadID(SDL_Gamepad *g) {
+    ENSURE();
+    if (g == FAKE_PAD) return FAKE_ID;
+    return r_GetGamepadID(g);
+}
+
 EXPORT bool SDL_GetGamepadButton(SDL_Gamepad *g, int button) {
     ENSURE();
     bool real = g != FAKE_PAD && r_GetGamepadButton(g, button);
@@ -696,14 +783,26 @@ EXPORT const bool *SDL_GetKeyboardState(int *numkeys) {
     return filtered;
 }
 
+/* With the runtime's PC controls on, its own bindings must not see the mouse buttons and the wheel
+ * while playing (they come from input_config here). Releases always pass, so nothing sticks. */
+static bool hide_from_runtime(const SDL_Event *e) {
+    if (!pc_controls_mode || (e->type != EV_MOUSE_BUTTON_DOWN && e->type != EV_MOUSE_WHEEL)) return false;
+    return mouse_in_game();
+}
+
 EXPORT bool SDL_PollEvent(SDL_Event *e) {
     ENSURE();
-    bool r = r_PollEvent(e);
-    if (enabled) {
-        if (r && e) handle_event(e);
-        update_capture();
+    for (;;) {
+        bool r = r_PollEvent(e);
+        if (enabled) {
+            if (r && e) {
+                handle_event(e);
+                if (hide_from_runtime(e)) continue;
+            }
+            update_capture();
+        }
+        return r;
     }
-    return r;
 }
 
 EXPORT SDL_Window *SDL_CreateWindowWithProperties(SDL_PropertiesID props) {
@@ -715,19 +814,98 @@ EXPORT SDL_Window *SDL_CreateWindowWithProperties(SDL_PropertiesID props) {
 
 /* ---- setup --------------------------------------------------------------------------------- */
 
-static void find_menu_flag(void) {
-    /* bb-probe.exe of Bloodborne PC Offline v0.1: pad_read_state checks BbOverlay::menu_open with
-     * `movzx eax, byte ptr [rip+disp32]` at RVA 0x40c4e. Only used when the bytes match. */
-    static const uint8_t sig[] = {0x0f, 0xb6, 0x05, 0x2e, 0xb1, 0x1f, 0x03};
+/* The runtime is located through the COFF symbol table that bb-probe.exe builds keep (read from
+ * the file on disk), so the same layer works on v0.1 and v0.4: the overlay menu / text prompt
+ * flags, pad_read_state, whether PC controls (bbgpu_pc_input) and the touch id fix (touch_ids)
+ * exist. Without symbols the v0.1 byte signature is the fallback. */
+static uint32_t rva_pad_read_state;
+static bool runtime_has_touch_ids;
+
+typedef struct { const char *prefix; uint32_t *rva; } SymWant;
+
+static void scan_symbols(const SymWant *want, int nwant) {
+    uint8_t *base = (uint8_t *)GetModuleHandleW(NULL);
+    IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)(base + ((IMAGE_DOS_HEADER *)base)->e_lfanew);
+    IMAGE_SECTION_HEADER *sec = IMAGE_FIRST_SECTION(nt);
+    DWORD nsec = nt->FileHeader.NumberOfSections;
+    DWORD symptr = nt->FileHeader.PointerToSymbolTable, nsym = nt->FileHeader.NumberOfSymbols;
+    if (!symptr || !nsym) return;
+    wchar_t exe[MAX_PATH];
+    GetModuleFileNameW(NULL, exe, MAX_PATH);
+    HANDLE f = CreateFileW(exe, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, 0, NULL);
+    if (f == INVALID_HANDLE_VALUE) return;
+    LARGE_INTEGER size;
+    GetFileSizeEx(f, &size);
+    uint64_t table = (uint64_t)nsym * 18;
+    if (symptr + table + 4 > (uint64_t)size.QuadPart) { CloseHandle(f); return; }
+    uint64_t total = (uint64_t)size.QuadPart - symptr; /* symbols + string table up to the end */
+    if (total > (64u << 20)) total = 64u << 20;
+    uint8_t *buf = malloc((size_t)total);
+    DWORD got = 0;
+    LARGE_INTEGER at = {.QuadPart = symptr};
+    bool ok = buf && SetFilePointerEx(f, at, NULL, FILE_BEGIN) && ReadFile(f, buf, (DWORD)total, &got, NULL) &&
+              got == total;
+    CloseHandle(f);
+    if (!ok) { free(buf); return; }
+    const char *strtab = (const char *)buf + table;
+    uint64_t strsize = total - table;
+    for (DWORD i = 0; i < nsym; i++) {
+        const uint8_t *s = buf + (uint64_t)i * 18;
+        uint8_t naux = s[17];
+        int16_t secno;
+        memcpy(&secno, s + 12, 2);
+        if (secno > 0 && (DWORD)secno <= nsec) {
+            char shortname[9] = {0};
+            const char *name;
+            uint32_t zero, off;
+            memcpy(&zero, s, 4);
+            memcpy(&off, s + 4, 4);
+            if (zero == 0) name = off < strsize ? strtab + off : "";
+            else { memcpy(shortname, s, 8); name = shortname; }
+            uint32_t value;
+            memcpy(&value, s + 8, 4);
+            for (int w = 0; w < nwant; w++)
+                if (!*want[w].rva && !strncmp(name, want[w].prefix, strlen(want[w].prefix)))
+                    *want[w].rva = sec[secno - 1].VirtualAddress + value;
+        }
+        i += naux;
+    }
+    free(buf);
+}
+
+static void find_runtime(void) {
     uint8_t *base = (uint8_t *)GetModuleHandleW(NULL);
     if (!base) return;
+    uint32_t menu = 0, prompt = 0, pc_input = 0, touch = 0;
+    SymWant want[] = {
+        {"_ZN9BbOverlay12_GLOBAL__N_19menu_openE", &menu},
+        {"_ZN9BbOverlay12_GLOBAL__N_113prompt_activeE", &prompt},
+        {"pad_read_state", &rva_pad_read_state},
+        {"bbgpu_pc_input", &pc_input},
+        {"touch_ids", &touch},
+    };
+    scan_symbols(want, sizeof want / sizeof *want);
+    runtime_has_pc_controls = pc_input != 0;
+    runtime_has_touch_ids = touch != 0;
+    if (menu) {
+        menu_open_flag = base + menu;
+        if (prompt) prompt_flag = base + prompt;
+        logf_("Runtime symbols: overlay menu flag%s, pad_read_state %s, PC controls %s, touch ids %s",
+              prompt ? " + text prompt flag" : "", rva_pad_read_state ? "found" : "missing",
+              runtime_has_pc_controls ? "yes" : "no", runtime_has_touch_ids ? "fixed" : "missing");
+        return;
+    }
+    /* bb-probe.exe of Bloodborne PC Offline v0.1 without symbols: pad_read_state checks
+     * BbOverlay::menu_open with `movzx eax, byte ptr [rip+disp32]` at RVA 0x40c4e. */
+    static const uint8_t sig[] = {0x0f, 0xb6, 0x05, 0x2e, 0xb1, 0x1f, 0x03};
     IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)(base + ((IMAGE_DOS_HEADER *)base)->e_lfanew);
     uint8_t *ins = base + 0x40c4e;
     if (nt->OptionalHeader.SizeOfImage > 0x40c4e + 16 && !memcmp(ins, sig, sizeof sig)) {
         menu_open_flag = ins + 7 + *(int32_t *)(ins + 3);
-        logf_("Overlay menu flag found; mouse is released while the menu is open");
+        rva_pad_read_state = 0x40b20;
+        logf_("Overlay menu flag found by signature (v0.1)");
     } else {
-        logf_("Overlay menu flag not found (other build): Insert toggles the mouse release");
+        logf_("Runtime not recognised: Insert toggles the mouse release, no touchpad fix");
     }
 }
 
@@ -771,14 +949,15 @@ static __attribute__((sysv_abi)) int32_t pad_read_state_hook(int32_t handle, uin
 }
 
 static void hook_pad_read_state(void) {
-    /* pad_read_state at RVA 0x40b20: push rbp/r15/r14/r13/r12/rbx; sub rsp, 0xe8 (17 bytes, no
-     * RIP-relative operands). Only hooked when these bytes and the overlay signature match. */
+    /* v0.1 pad_read_state: push rbp/r15/r14/r13/r12/rbx; sub rsp, 0xe8 (17 bytes, no RIP-relative
+     * operands). Only hooked when the runtime lacks touch_ids and these bytes match. */
     static const uint8_t prologue[17] = {0x55, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54,
                                          0x53, 0x48, 0x81, 0xec, 0xe8, 0x00, 0x00, 0x00};
+    if (runtime_has_touch_ids) return; /* fixed in the runtime itself (bbport 0.4+) */
     uint8_t *base = (uint8_t *)GetModuleHandleW(NULL);
-    uint8_t *fn = base + 0x40b20;
-    if (!menu_open_flag || memcmp(fn, prologue, sizeof prologue)) {
-        logf_("pad_read_state not recognised (other build): touchpad ids left as they are");
+    uint8_t *fn = base + rva_pad_read_state;
+    if (!rva_pad_read_state || memcmp(fn, prologue, sizeof prologue)) {
+        logf_("pad_read_state not recognised: touchpad ids left as they are");
         return;
     }
     InitializeCriticalSection(&touch_lock);
@@ -855,6 +1034,10 @@ static BOOL CALLBACK init(PINIT_ONCE once, PVOID param, PVOID *ctx) {
     LOAD(r_PollEvent, "SDL_PollEvent");
     LOAD(r_CreateWindowWithProperties, "SDL_CreateWindowWithProperties");
     LOAD(r_SetWindowRelativeMouseMode, "SDL_SetWindowRelativeMouseMode");
+    LOAD(r_GetWindowRelativeMouseMode, "SDL_GetWindowRelativeMouseMode");
+    LOAD(r_GetGamepadNameForID, "SDL_GetGamepadNameForID");
+    LOAD(r_GetGamepadGUIDForID, "SDL_GetGamepadGUIDForID");
+    LOAD(r_GetGamepadID, "SDL_GetGamepadID");
     LOAD(r_malloc, "SDL_malloc");
     LOAD(r_free, "SDL_free");
 
@@ -862,7 +1045,8 @@ static BOOL CALLBACK init(PINIT_ONCE once, PVOID param, PVOID *ctx) {
     logf_("Data folder: %ls", root_dir);
     if (enabled) {
         load_config();
-        find_menu_flag();
+        find_runtime();
+        detect_pc_controls();
         hook_pad_read_state();
     }
     return TRUE;
