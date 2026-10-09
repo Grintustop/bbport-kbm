@@ -17,6 +17,8 @@ This add-on adds:
 - **BloodborneControls.exe** — a bindings editor (English / Russian).
 - **Smooth stick turning for keys**: removes the stumble when you add A or D while sprinting
   forward (see below).
+- **Touchpad fix for the v0.1 build**: the gesture menu and Personal Effects open again, from
+  keys, from Back on Xbox pads and from a real DualShock 4 touchpad (see below).
 - Real gamepads keep working; keyboard and mouse are merged into them.
 
 No game files and no files of the port are included.
@@ -76,6 +78,19 @@ FromSoftware's engine might reacts to such a jump while sprinting with a
 stumbling turn animation (I experienced this in Bloodborne and Dark Souls 3.) — on one side or both depending on the camera.
 The add-on turns the key-driven stick along its rim instead (45° in ~50 ms at the default). Reversals (W → S) still go
 through the centre at once.
+
+### Touchpad: gestures and Personal Effects
+
+| Binding | Opens |
+|---|---|
+| `touchpad_center`, `touchpad_left` | Gestures |
+| `touchpad_right` | Personal Effects |
+
+The game accepts a touchpad press only when the touch looks like a DualShock 4 one: a new touch
+id (1–127) for every press and the time it has been held. The v0.1 runtime reports id 0 and no
+hold time, so the touchpad was ignored from every source (bbport fixed this later in
+`runtime_pad.c`, [deadinside28/bloodborne_pc#48](https://github.com/deadinside28/bloodborne_pc/issues/48)). On the v0.1 build the add-on wraps the runtime's pad read and fills
+these fields in; other builds are left alone (the function is matched by its bytes).
 
 ### KeyTest.exe
 

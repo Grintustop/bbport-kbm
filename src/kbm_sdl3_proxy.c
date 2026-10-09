@@ -731,6 +731,80 @@ static void find_menu_flag(void) {
     }
 }
 
+/* ---- touchpad fix for the v0.1 runtime ------------------------------------------------------
+ * The game only accepts a touchpad press when the touch looks like a DualShock 4 one: every finger
+ * that goes down gets a new id (1..127, kept while it stays down) and the time since it went down.
+ * The v0.1 runtime reports id 0 and no hold time, so the gesture menu never opened (from keys, Back
+ * or a real touchpad); bbport fixed this later in runtime_pad.c (touch_ids). Here pad_read_state is
+ * wrapped and the same fields are filled in after it. OrbisPadData: touch_count 0x34,
+ * touch_held_time 0x38, touches[2] 0x3c (id at +4, 8 bytes each), timestamp 0x50 (microseconds). */
+
+typedef int32_t(__attribute__((sysv_abi)) * PadReadStateFn)(int32_t handle, uint8_t *data);
+static PadReadStateFn pad_read_state_orig;
+static CRITICAL_SECTION touch_lock;
+
+static void fix_touch_ids(uint8_t *d) {
+    static uint8_t next_id = 1, ids[2];
+    static bool down[2];
+    static uint64_t since;
+    uint8_t count = d[0x34];
+    uint64_t timestamp;
+    memcpy(&timestamp, d + 0x50, 8);
+    EnterCriticalSection(&touch_lock);
+    for (int i = 0; i < 2; i++) {
+        bool now = i < count;
+        if (now && !down[i]) { ids[i] = next_id; next_id = next_id == 127 ? 1 : next_id + 1; }
+        down[i] = now;
+        if (now) d[0x3c + 8 * i + 4] = ids[i];
+    }
+    if (!count) since = 0;
+    else if (!since) since = timestamp;
+    uint32_t held = count ? (uint32_t)(timestamp - since) : 0;
+    LeaveCriticalSection(&touch_lock);
+    memcpy(d + 0x38, &held, 4);
+}
+
+static __attribute__((sysv_abi)) int32_t pad_read_state_hook(int32_t handle, uint8_t *data) {
+    int32_t r = pad_read_state_orig(handle, data);
+    if (r == 0 && data) fix_touch_ids(data);
+    return r;
+}
+
+static void hook_pad_read_state(void) {
+    /* pad_read_state at RVA 0x40b20: push rbp/r15/r14/r13/r12/rbx; sub rsp, 0xe8 (17 bytes, no
+     * RIP-relative operands). Only hooked when these bytes and the overlay signature match. */
+    static const uint8_t prologue[17] = {0x55, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54,
+                                         0x53, 0x48, 0x81, 0xec, 0xe8, 0x00, 0x00, 0x00};
+    uint8_t *base = (uint8_t *)GetModuleHandleW(NULL);
+    uint8_t *fn = base + 0x40b20;
+    if (!menu_open_flag || memcmp(fn, prologue, sizeof prologue)) {
+        logf_("pad_read_state not recognised (other build): touchpad ids left as they are");
+        return;
+    }
+    InitializeCriticalSection(&touch_lock);
+    /* trampoline: the 17 original bytes, then jmp [rip+0] -> fn + 17 */
+    uint8_t *tramp = VirtualAlloc(NULL, 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!tramp) return;
+    memcpy(tramp, prologue, sizeof prologue);
+    uint8_t jmp_abs[6] = {0xff, 0x25, 0, 0, 0, 0};
+    memcpy(tramp + 17, jmp_abs, 6);
+    uint64_t back = (uint64_t)(fn + 17);
+    memcpy(tramp + 23, &back, 8);
+    pad_read_state_orig = (PadReadStateFn)(void *)tramp;
+
+    uint8_t patch[17];
+    memset(patch, 0x90, sizeof patch); /* nop the rest of the replaced prologue */
+    memcpy(patch, jmp_abs, 6);
+    uint64_t target = (uint64_t)(void *)pad_read_state_hook;
+    memcpy(patch + 6, &target, 8);
+    DWORD old;
+    if (!VirtualProtect(fn, sizeof patch, PAGE_EXECUTE_READWRITE, &old)) return;
+    memcpy(fn, patch, sizeof patch);
+    VirtualProtect(fn, sizeof patch, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), fn, sizeof patch);
+    logf_("Touchpad fix on: touches get DualShock 4 ids and hold times (gesture menu)");
+}
+
 #define LOAD(var, name) (*(FARPROC *)&var = GetProcAddress(real_sdl, name))
 
 static HMODULE self_module;
@@ -789,6 +863,7 @@ static BOOL CALLBACK init(PINIT_ONCE once, PVOID param, PVOID *ctx) {
     if (enabled) {
         load_config();
         find_menu_flag();
+        hook_pad_read_state();
     }
     return TRUE;
 }
