@@ -250,7 +250,7 @@ static const char default_config[] =
     "axis_right_x_plus = right\n\n"
     "leftjoystick_halfmode = lctrl\n\n"
     "# keyboard-driven sticks: circle or square diagonals, ms per 90 degree turn (0 = instant)\n"
-    "stick_shape = circle\nstick_smoothing_ms = 100\n\n"
+    "stick_shape = circle\nstick_smoothing_ms = 70\n\n"
     "mouse_to_joystick = right\n"
     "# deadzone offset, speed, speed offset\n"
     "mouse_movement_params = 0.5, 1.0, 0.125\n";
@@ -360,7 +360,7 @@ static bool load_file(Config *c, const wchar_t *path, const char *fallback) {
 static void load_config(void) {
     Config *c = calloc(1, sizeof *c);
     c->deadzone_offset = 0.5f; c->speed = 1.0f; c->speed_offset = 0.125f; c->poll_ms = 33;
-    c->smooth_ms = 100;
+    c->smooth_ms = 70;
     c->key_toggle_capture = 64; c->key_reload = 65; /* F7, F8 */
     wchar_t dir[MAX_PATH], path[MAX_PATH];
     swprintf(dir, MAX_PATH, L"%ls\\input_config", root_dir);

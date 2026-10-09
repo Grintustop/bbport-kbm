@@ -84,7 +84,7 @@ Extra options of this add-on (ignored by shadPS4):
 
 | Option | Default | Meaning |
 |---|---|---|
-| `stick_smoothing_ms` | `100` | Time for a key-driven stick to turn by 90°. `0` = instant. |
+| `stick_smoothing_ms` | `70` | Time for a key-driven stick to turn by 90°. `0` = instant. Suggested: 90 and 60 FPS — 40, 30 FPS — 70. |
 | `stick_shape` | `circle` | `circle`: W+A tilts the stick like a real thumb (≈ 0.71, 0.71). `square`: corners, like shadPS4. |
 | `mouse_poll_ms` | `33` | Mouse sampling period (shadPS4 uses 33 ms). |
 
@@ -98,7 +98,7 @@ Keys are matched by position (scancodes), so the keyboard layout (e.g. Russian) 
 With keys the stick direction jumps by 45° in one frame (W → W+A). A thumb cannot do that, and
 FromSoftware's engine may react to such a jump while sprinting with a stumbling turn animation
 (I experienced this in Bloodborne and Dark Souls 3) — on one side or both depending on the camera.
-The add-on turns the key-driven stick along its rim instead (45° in ~50 ms at the default).
+The add-on turns the key-driven stick along its rim instead (45° in ~35 ms at the default).
 Reversals (W → S) still go through the centre at once.
 
 ### Touchpad: gestures and Personal Effects

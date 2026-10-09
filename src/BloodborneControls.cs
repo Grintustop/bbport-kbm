@@ -162,7 +162,7 @@ class ControlsForm : Form
         stickShape.Items.AddRange(new object[] { L.T("Круг (как у геймпада)", "Circle (like a gamepad)"), L.T("Квадрат (как в shadPS4)", "Square (like shadPS4)") });
         stickShape.Width = 190;
         AddRow(table, L.T("Форма диагоналей", "Diagonal shape"), stickShape, L.T("круг: W+A наклоняет стик как настоящий палец", "circle: W+A tilts the stick like a real thumb"));
-        AddRow(table, L.T("Плавность поворота, мс на 90°", "Turn smoothing, ms per 90°"), smoothing, L.T("убирает спотыкание при W→W+A на бегу; 0 — мгновенно", "removes the stumble on W→W+A while sprinting; 0 = instant"));
+        AddRow(table, L.T("Плавность поворота, мс на 90°", "Turn smoothing, ms per 90°"), smoothing, L.T("убирает спотыкание при W→W+A на бегу. Рекомендуется: 90 и 60 FPS — 40 мс, 30 FPS — 70 мс; 0 — мгновенно", "removes the stumble on W→W+A while sprinting. Suggested: 90 and 60 FPS — 40 ms, 30 FPS — 70 ms; 0 = instant"));
 
         AddGroup(table, L.T("Мышь", "Mouse"));
         string mode = MouseModeText();
@@ -187,9 +187,9 @@ class ControlsForm : Form
         AddRow(table, L.T("Перечитать настройки без перезапуска", "Reload settings without restarting"), hotReload, null);
         table.Controls.Add(new Label
         {
-            Text = L.T("Клик по полю — назначить (Esc — отмена, Delete — очистить). Для комбинации удерживайте Shift/Ctrl/Alt " +
+            Text = L.T("Клик по полю — назначить (Delete — очистить). Для комбинации удерживайте Shift/Ctrl/Alt " +
                        "и нажмите клавишу или кнопку мыши. Меню порта: Insert. В меню и вне фокуса мышь освобождается.",
-                       "Click a field to bind it (Esc cancels, Delete clears). For a combination hold Shift/Ctrl/Alt " +
+                       "Click a field to bind it (Delete clears it). For a combination hold Shift/Ctrl/Alt " +
                        "and press a key or mouse button. Port menu: Insert. The mouse is released in the menu and when the game loses focus."),
             AutoSize = true, MaximumSize = new Size(660, 0), ForeColor = SystemColors.GrayText, Margin = new Padding(3, 12, 3, 3)
         });
@@ -296,7 +296,7 @@ class ControlsForm : Form
         foreach (var pair in boxes.Values) { pair[0].Text = ""; pair[1].Text = ""; }
         mouseStick.SelectedIndex = 0;
         stickShape.SelectedIndex = 0;
-        smoothing.Value = 100;
+        smoothing.Value = 70;
         deadzone.Value = 0.5m; speed.Value = 1m; speedOffset.Value = 0.125m; pollMs.Value = 33;
         var other = new List<string>();
         foreach (var raw in text.Replace("\r", "").Split('\n'))
@@ -481,6 +481,7 @@ class KeyCapture : Form, IMessageFilter
     public string Result;
     readonly List<string> held = new List<string>();
     readonly Label info;
+    readonly Button cancel;
 
     public KeyCapture(string title)
     {
@@ -489,17 +490,21 @@ class KeyCapture : Form, IMessageFilter
         MaximizeBox = MinimizeBox = false;
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.CenterParent;
-        ClientSize = new Size(420, 150);
+        ClientSize = new Size(420, 170);
         KeyPreview = true;
         info = new Label
         {
             Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter, Font = new Font("Segoe UI", 10.5f),
-            Text = L.T("Нажмите клавишу, кнопку мыши или прокрутите колесо в этом окне.\n" +
-                       "Комбинация: удерживайте Shift / Ctrl / Alt.\nEsc — отмена",
-                       "Press a key or mouse button, or scroll the wheel in this window.\n" +
-                       "Combination: hold Shift / Ctrl / Alt.\nEsc cancels")
+            Text = L.T("Нажмите клавишу (Esc тоже), кнопку мыши или прокрутите колесо в этом окне.\n" +
+                       "Комбинация: удерживайте Shift / Ctrl / Alt.",
+                       "Press a key (Esc too), a mouse button, or scroll the wheel in this window.\n" +
+                       "Combination: hold Shift / Ctrl / Alt.")
         };
+        // Esc is a bindable key (e.g. Options), so cancelling is a button; its clicks are not captured.
+        cancel = new Button { Text = L.T("Отмена", "Cancel"), Dock = DockStyle.Bottom, Height = 32 };
+        cancel.Click += (s, e) => { DialogResult = DialogResult.Cancel; };
         Controls.Add(info);
+        Controls.Add(cancel);
         Application.AddMessageFilter(this);
         FormClosed += (s, e) => Application.RemoveMessageFilter(this);
     }
@@ -515,6 +520,7 @@ class KeyCapture : Form, IMessageFilter
     public bool PreFilterMessage(ref Message m)
     {
         if (!ContainsFocus && m.HWnd != Handle && !IsChild(m.HWnd)) return false;
+        if (m.HWnd == cancel.Handle && m.Msg >= 0x200 && m.Msg <= 0x20E) return false; // the Cancel button's own mouse input
         switch (m.Msg)
         {
         case 0x100: case 0x104: // WM_KEYDOWN, WM_SYSKEYDOWN
@@ -524,7 +530,6 @@ class KeyCapture : Form, IMessageFilter
             string name;
             if (!Scan.TryGetValue(code, out name)) return true;
             if (((lp >> 30) & 1) != 0) return true; // auto-repeat
-            if (name == "escape" && held.Count == 0) { DialogResult = DialogResult.Cancel; return true; }
             if (Modifiers.Contains(name))
             {
                 if (!held.Contains(name)) held.Add(name);
