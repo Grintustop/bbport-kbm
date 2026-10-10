@@ -115,7 +115,7 @@ typedef struct {
     bool square_sticks; /* stick_shape = square: keyboard diagonals reach the corners, as in shadPS4 */
     float smooth_ms;    /* stick_smoothing_ms: time a key-driven stick needs to turn by 90 degrees */
     int key_toggle_capture, key_reload;
-    bool uses_mouse;
+    bool uses_mouse, uses_wheel;
 } Config;
 
 static CRITICAL_SECTION lock;
@@ -336,7 +336,10 @@ static void parse_line(Config *c, char *line, const char *file, int lineno) {
     }
     if (!b.nkeys) return;
     if (c->n >= MAX_BINDINGS) { logf_("%s:%d: too many bindings", file, lineno); return; }
-    for (int i = 0; i < b.nkeys; i++) if (b.keys[i] >= IN_MOUSE) c->uses_mouse = true;
+    for (int i = 0; i < b.nkeys; i++) {
+        if (b.keys[i] >= IN_MOUSE) c->uses_mouse = true;
+        if (b.keys[i] >= IN_WHEEL_UP && b.keys[i] <= IN_WHEEL_RIGHT) c->uses_wheel = true;
+    }
     c->b[c->n++] = b;
 }
 
@@ -438,6 +441,14 @@ static bool mouse_in_game(void) {
     return captured;
 }
 
+/* The wheel also counts in the game's menus when it is bound (e.g. the d-pad on the wheel, to
+ * change values when levelling up): there the runtime's pointer would only scroll. Not in the
+ * port's own overlay menu. */
+static bool wheel_in_game(void) {
+    if (mouse_in_game()) return true;
+    return native_mouse_camera && cfg.uses_wheel && focused && !menu_open();
+}
+
 /* The runtime keeps the high byte (+128) of a stick axis, so v * 256 gives the PS4 byte 128 + v:
  * -127..127 -> 1..255, symmetric around the centre (32767 / -32767 would give 255 / 0). */
 static int16_t stick_axis16(float v127) {
@@ -468,10 +479,11 @@ static void update_snapshot(void) {
         if (ks) for (int i = 0; i < SC_COUNT; i++) pressed[i] = ks[i];
     }
 
-    bool mouse_on = active && mouse_in_game();
+    bool mouse_on = active && mouse_in_game(), wheel_on = active && wheel_in_game();
     EnterCriticalSection(&lock);
-    if (mouse_on) {
+    if (mouse_on)
         for (int i = 1; i <= 5; i++) pressed[IN_MOUSE + i] = mouse_down[i] && down_in_game[i];
+    if (wheel_on) {
         for (int i = 0; i < 4; i++) {
             if (wheel_pending[i]) { wheel_pending[i] = 0; wheel_until[i] = t + 33.0; }
             pressed[IN_WHEEL_UP + i] = t < wheel_until[i];
@@ -626,7 +638,7 @@ static void handle_event(const SDL_Event *e) {
     case EV_MOUSE_WHEEL: {
         float x = *(const float *)(p + 24), y = *(const float *)(p + 28);
         if (*(const uint32_t *)(p + 32) == 1) { x = -x; y = -y; } /* SDL_MOUSEWHEEL_FLIPPED */
-        if (mouse_in_game()) {
+        if (wheel_in_game()) {
             if (y > 0) wheel_pending[0] = 1;
             if (y < 0) wheel_pending[1] = 1;
             if (x < 0) wheel_pending[2] = 1;
@@ -786,8 +798,10 @@ EXPORT const bool *SDL_GetKeyboardState(int *numkeys) {
 /* With the runtime's PC controls on, its own bindings must not see the mouse buttons and the wheel
  * while playing (they come from input_config here). Releases always pass, so nothing sticks. */
 static bool hide_from_runtime(const SDL_Event *e) {
-    if (!pc_controls_mode || (e->type != EV_MOUSE_BUTTON_DOWN && e->type != EV_MOUSE_WHEEL)) return false;
-    return mouse_in_game();
+    if (!pc_controls_mode) return false;
+    if (e->type == EV_MOUSE_BUTTON_DOWN) return mouse_in_game();
+    if (e->type == EV_MOUSE_WHEEL) return wheel_in_game();
+    return false;
 }
 
 EXPORT bool SDL_PollEvent(SDL_Event *e) {
