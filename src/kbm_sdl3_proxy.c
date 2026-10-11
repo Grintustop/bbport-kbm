@@ -134,6 +134,7 @@ static volatile const uint8_t *prompt_flag;    /* BbOverlay::prompt_active (v0.4
  * capture (the menus keep its mouse pointer). */
 static bool runtime_has_pc_controls, pc_controls_mode, native_mouse_camera;
 static bool mouse_down[8], down_in_game[8]; /* down_in_game: pressed while the mouse was captured */
+static bool last_down_taken; /* the last button press is ours: keep it from the runtime */
 static float acc_dx, acc_dy;
 static volatile int wheel_pending[4];
 static double wheel_until[4];
@@ -449,6 +450,31 @@ static bool wheel_in_game(void) {
     return native_mouse_camera && cfg.uses_wheel && focused && !menu_open();
 }
 
+/* In the game's menus the runtime's pointer uses a left click to click and a right click as Back.
+ * A mouse button bound in input_config still counts there when one of its bindings can fire now
+ * (e.g. L2 on the right button to switch storage / inventory), except a plain left click, which
+ * stays a pointer click; a left click with the other keys of a combination held
+ * (r2 = lshift,leftbutton) counts too. Window thread. */
+static bool button_in_menu(int button) {
+    if (!native_mouse_camera || !focused || menu_open()) return false;
+    const bool *ks = r_GetKeyboardState(NULL);
+    int code = IN_MOUSE + button;
+    for (int i = 0; i < cfg.n; i++) {
+        const Binding *b = &cfg.b[i];
+        bool has = false, others = true;
+        for (int k = 0; k < b->nkeys; k++) {
+            int key = b->keys[k];
+            if (key == code) has = true;
+            else if (key < SC_COUNT) others = others && ks && ks[key];
+            else if (key < IN_WHEEL_UP) others = others && mouse_down[key - IN_MOUSE];
+            else others = false;
+        }
+        if (!has || !others) continue;
+        if (button != 1 || b->nkeys > 1) return true;
+    }
+    return false;
+}
+
 /* The runtime keeps the high byte (+128) of a stick axis, so v * 256 gives the PS4 byte 128 + v:
  * -127..127 -> 1..255, symmetric around the centre (32767 / -32767 would give 255 / 0). */
 static int16_t stick_axis16(float v127) {
@@ -479,9 +505,9 @@ static void update_snapshot(void) {
         if (ks) for (int i = 0; i < SC_COUNT; i++) pressed[i] = ks[i];
     }
 
-    bool mouse_on = active && mouse_in_game(), wheel_on = active && wheel_in_game();
+    bool wheel_on = active && wheel_in_game();
     EnterCriticalSection(&lock);
-    if (mouse_on)
+    if (active) /* down_in_game: pressed while captured, or a bound button in a game menu */
         for (int i = 1; i <= 5; i++) pressed[IN_MOUSE + i] = mouse_down[i] && down_in_game[i];
     if (wheel_on) {
         for (int i = 0; i < 4; i++) {
@@ -627,7 +653,8 @@ static void handle_event(const SDL_Event *e) {
         if (b < 8) {
             bool down = e->type == EV_MOUSE_BUTTON_DOWN;
             /* a click in a menu that closes it does not turn into an attack */
-            bool in_game = down && mouse_in_game();
+            bool in_game = down && (mouse_in_game() || button_in_menu(b));
+            if (down) last_down_taken = in_game;
             EnterCriticalSection(&lock);
             mouse_down[b] = down;
             down_in_game[b] = in_game;
@@ -799,7 +826,7 @@ EXPORT const bool *SDL_GetKeyboardState(int *numkeys) {
  * while playing (they come from input_config here). Releases always pass, so nothing sticks. */
 static bool hide_from_runtime(const SDL_Event *e) {
     if (!pc_controls_mode) return false;
-    if (e->type == EV_MOUSE_BUTTON_DOWN) return mouse_in_game();
+    if (e->type == EV_MOUSE_BUTTON_DOWN) return last_down_taken; /* set by handle_event */
     if (e->type == EV_MOUSE_WHEEL) return wheel_in_game();
     return false;
 }

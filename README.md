@@ -127,8 +127,10 @@ the keyboard drops when several are held).
 runtime (`bb-probe.exe`) uses for the pad. The proxy adds a virtual “Keyboard & Mouse” gamepad
 fed from your bindings and hides the keyboard from the runtime's own key handling (v0.1's fixed
 layout, v0.4's `bind.*`). On v0.4 with PC controls, mouse button and wheel presses are kept from
-the runtime while the mouse is captured (they are yours), but mouse movement and menu clicks still
-reach it, so the native camera and pointer work. Without the native camera the proxy captures the
+the runtime while the mouse is captured (they are yours), but mouse movement still reaches it, so
+the native camera works. In the game's menus (where the mouse is the port's pointer) your bound
+wheel and mouse buttons keep working — e.g. L2/R2 to switch storage and inventory — except a
+plain left click, which stays a pointer click. Without the native camera the proxy captures the
 mouse itself (SDL relative mode) and turns its movement into the right stick. The port's overlay
 menu and text prompts are found through the runtime's symbols; while they are open the mouse is
 released. Log: `logs\kbm-input.log`.
