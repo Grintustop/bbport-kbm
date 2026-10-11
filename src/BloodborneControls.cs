@@ -106,7 +106,7 @@ class ControlsForm : Form
     readonly string root, configDir, defaultIni, globalIni;
     readonly Dictionary<string, TextBox[]> boxes = new Dictionary<string, TextBox[]>();
     readonly ComboBox mouseStick = new ComboBox(), stickShape = new ComboBox();
-    readonly NumericUpDown smoothing = Num(0, 1000, 10, 0);
+    readonly NumericUpDown smoothing = Num(0, 1000, 10, 0), jumpRunup = Num(0, 2000, 10, 0);
     readonly NumericUpDown deadzone = Num(0, 1, 0.01m, 2), speed = Num(0, 20, 0.1m, 2),
                            speedOffset = Num(0, 1, 0.01m, 3), pollMs = Num(1, 200, 1, 0);
     readonly TextBox hotCapture = Box(), hotReload = Box();
@@ -164,6 +164,11 @@ class ControlsForm : Form
         stickShape.Width = 190;
         AddRow(table, L.T("Форма диагоналей", "Diagonal shape"), stickShape, L.T("круг: W+A наклоняет стик как настоящий палец", "circle: W+A tilts the stick like a real thumb"));
         AddRow(table, L.T("Плавность поворота, мс на 90°", "Turn smoothing, ms per 90°"), smoothing, L.T("убирает спотыкание при W→W+A на бегу. Рекомендуется: 90 и 60 FPS — 40 мс, 30 FPS — 70 мс; 0 — мгновенно", "removes the stumble on W→W+A while sprinting. Suggested: 90 and 60 FPS — 40 ms, 30 FPS — 70 ms; 0 = instant"));
+
+        AddGroup(table, L.T("Прыжок", "Jump"));
+        AddRow(table, L.T("Разгон перед прыжком, мс", "Run-up before a jump, ms"), jumpRunup,
+               L.T("0 — клавиша прыжка работает только на бегу (не нужно второй раз жать бег). Больше 0 — она сама разгоняется и прыгает из шага; удобно около 600 мс",
+                   "0 = the jump key works only while sprinting (no second tap of sprint). Above 0 it also starts a sprint and jumps from walking; about 600 ms feels right"));
 
         AddGroup(table, L.T("Мышь", "Mouse"));
         string mode = MouseModeText();
@@ -298,6 +303,7 @@ class ControlsForm : Form
         mouseStick.SelectedIndex = 0;
         stickShape.SelectedIndex = 0;
         smoothing.Value = 70;
+        jumpRunup.Value = 0;
         deadzone.Value = 0.5m; speed.Value = 1m; speedOffset.Value = 0.125m; pollMs.Value = 33;
         var other = new List<string>();
         foreach (var raw in text.Replace("\r", "").Split('\n'))
@@ -318,6 +324,7 @@ class ControlsForm : Form
                 continue;
             }
             if (o == "stick_shape") { stickShape.SelectedIndex = i == "square" ? 1 : 0; continue; }
+            if (o == "jump_runup_ms") { decimal v; if (TryDec(i, out v)) jumpRunup.Value = Clamp(jumpRunup, v); continue; }
             if (o == "stick_smoothing_ms") { decimal v; if (TryDec(i, out v)) smoothing.Value = Clamp(smoothing, v); continue; }
             if (o == "mouse_poll_ms") { decimal v; if (TryDec(i, out v)) pollMs.Value = Clamp(pollMs, v); continue; }
             TextBox[] pair;
@@ -413,6 +420,9 @@ class ControlsForm : Form
         sb.AppendLine("# Keyboard-driven sticks (bbport): circle or square, ms per 90 degree turn");
         sb.AppendLine("stick_shape = " + (stickShape.SelectedIndex == 1 ? "square" : "circle"));
         sb.AppendLine("stick_smoothing_ms = " + smoothing.Value);
+        sb.AppendLine();
+        sb.AppendLine("# Jump key (bbport): sprint before a jump from walking, ms (0 = only while sprinting)");
+        sb.AppendLine("jump_runup_ms = " + jumpRunup.Value);
         sb.AppendLine();
         sb.AppendLine("# Mouse");
         sb.AppendLine("mouse_to_joystick = " + new[] { "none", "left", "right" }[mouseStick.SelectedIndex]);

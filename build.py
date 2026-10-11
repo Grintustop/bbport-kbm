@@ -23,7 +23,7 @@ HERE = Path(__file__).resolve().parent
 SRC = HERE / 'src'
 DIST = HERE / 'dist'
 BUILD = HERE / 'build'
-VERSION = '2.1.0'
+VERSION = '2.1.1'
 
 
 def pe_exports(path):

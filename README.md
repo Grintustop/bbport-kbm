@@ -89,7 +89,7 @@ Extra options of this add-on (ignored by shadPS4):
 | `stick_shape` | `circle` | `circle`: W+A tilts the stick like a real thumb (≈ 0.71, 0.71). `square`: corners, like shadPS4. |
 | `mouse_poll_ms` | `33` | Mouse sampling period (shadPS4 uses 33 ms). |
 | `jump = key` | — | A dedicated jump key (see below). |
-| `jump_runup_ms` | `400` | Sprint before a jump started from walking. `0` = jump only while sprinting. |
+| `jump_runup_ms` | `0` | `0`: the jump key works while sprinting. Above `0` it also starts a sprint and jumps from walking (about `600` feels right). |
 
 `mouse_to_joystick` and `mouse_movement_params` apply only when the port's native mouse camera is
 off; with it, sensitivity and inversion are set in the port's launcher.
@@ -111,7 +111,7 @@ the release). `jump = key` plays that for you, like the jump button of later Fro
 
 - while sprinting (○ held): ○ off 60 ms, on 90 ms, off 60 ms, then held again — you jump and keep
   sprinting after landing;
-- while walking: ○ is held for `jump_runup_ms` to start the sprint, then the same tap;
+- while walking, with `jump_runup_ms` above 0 (about 600): ○ is held that long to start the sprint, then the same tap (with `0`, the default, nothing happens);
 - standing still: nothing (the game has no standing jump).
 
 ### Touchpad: gestures and Personal Effects
