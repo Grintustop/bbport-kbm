@@ -15,6 +15,7 @@ of the port's action list:
 - **BloodborneControls.exe**: a bindings editor — click a field, press a key (English / Russian).
 - **Mouse camera**: on v0.4 the port's native mouse camera and menu pointer are kept; otherwise
   shadPS4's mouse-to-stick model.
+- **Dedicated jump key** (Bloodborne only jumps by re-tapping ○ while sprinting).
 - **Smooth stick turning for keys** (no stumble when adding A/D while sprinting), circle or square
   diagonals.
 - Real gamepads keep working; keyboard and mouse are merged into them.
@@ -87,6 +88,8 @@ Extra options of this add-on (ignored by shadPS4):
 | `stick_smoothing_ms` | `70` | Time for a key-driven stick to turn by 90°. `0` = instant. Suggested: 90 and 60 FPS — 40, 30 FPS — 70. |
 | `stick_shape` | `circle` | `circle`: W+A tilts the stick like a real thumb (≈ 0.71, 0.71). `square`: corners, like shadPS4. |
 | `mouse_poll_ms` | `33` | Mouse sampling period (shadPS4 uses 33 ms). |
+| `jump = key` | — | A dedicated jump key (see below). |
+| `jump_runup_ms` | `400` | Sprint before a jump started from walking. `0` = jump only while sprinting. |
 
 `mouse_to_joystick` and `mouse_movement_params` apply only when the port's native mouse camera is
 off; with it, sensitivity and inversion are set in the port's launcher.
@@ -100,6 +103,16 @@ FromSoftware's engine may react to such a jump while sprinting with a stumbling 
 (I experienced this in Bloodborne and Dark Souls 3) — on one side or both depending on the camera.
 The add-on turns the key-driven stick along its rim instead (45° in ~35 ms at the default).
 Reversals (W → S) still go through the centre at once.
+
+### Jump key
+
+Bloodborne has no jump button: you jump with a quick tap of ○ while sprinting (the jump comes on
+the release). `jump = key` plays that for you, like the jump button of later FromSoftware games:
+
+- while sprinting (○ held): ○ off 60 ms, on 90 ms, off 60 ms, then held again — you jump and keep
+  sprinting after landing;
+- while walking: ○ is held for `jump_runup_ms` to start the sprint, then the same tap;
+- standing still: nothing (the game has no standing jump).
 
 ### Touchpad: gestures and Personal Effects
 

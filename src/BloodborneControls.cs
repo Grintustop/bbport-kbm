@@ -64,6 +64,7 @@ class ControlsForm : Form
         new Action("Кнопки", "Buttons", "l1", "L1 — трансформация оружия", "L1 — transform weapon"),
         new Action("Кнопки", "Buttons", "l2", "L2 — огнестрел / левая рука", "L2 — firearm / left hand"),
         new Action("Кнопки", "Buttons", "circle", "○ — уклонение / бег (удерживать), на бегу — прыжок", "○ — dodge / sprint (hold), jump while sprinting"),
+        new Action("Кнопки", "Buttons", "jump", "Прыжок — отдельная клавиша (на бегу или с разгоном)", "Jump — dedicated key (while sprinting or with a run-up)"),
         new Action("Кнопки", "Buttons", "cross", "✕ — взаимодействие / подтвердить", "✕ — interact / confirm"),
         new Action("Кнопки", "Buttons", "triangle", "△ — флакон крови", "△ — blood vial"),
         new Action("Кнопки", "Buttons", "square", "□ — использовать предмет", "□ — use item"),

@@ -97,7 +97,7 @@ static struct { int dummy; } fake_pad_obj;
 #define IN_WHEEL_RIGHT 523
 #define IN_COUNT 528
 
-enum { OUT_BUTTON, OUT_AXIS, OUT_HALF_LEFT, OUT_HALF_RIGHT };
+enum { OUT_BUTTON, OUT_AXIS, OUT_HALF_LEFT, OUT_HALF_RIGHT, OUT_JUMP };
 enum { TOUCH_NONE, TOUCH_LEFT, TOUCH_CENTER, TOUCH_RIGHT };
 
 typedef struct {
@@ -114,6 +114,7 @@ typedef struct {
     int poll_ms;
     bool square_sticks; /* stick_shape = square: keyboard diagonals reach the corners, as in shadPS4 */
     float smooth_ms;    /* stick_smoothing_ms: time a key-driven stick needs to turn by 90 degrees */
+    float jump_runup_ms; /* jump_runup_ms: sprint before a jump from walking (0 = only while sprinting) */
     int key_toggle_capture, key_reload;
     bool uses_mouse, uses_wheel;
 } Config;
@@ -149,6 +150,9 @@ static Snapshot snap;
 static double snap_time = -1e9, mouse_sample_time = -1e9;
 static float mouse_ax, mouse_ay;
 static float key_stick[2][2]; /* key-driven stick vectors after smoothing */
+static bool jump_was_held;
+static int jump_mode; /* 0 idle, 1 re-tap of a held sprint, 2 run-up then re-tap */
+static double jump_start;
 static double smooth_time = -1e9;
 static bool real_pad_present;
 static double real_pad_check_time = -1e9;
@@ -231,6 +235,7 @@ static const OutName out_names[] = {
     {"axis_right_y_plus", OUT_AXIS, AX_RY, 127, 0}, {"axis_right_y_minus", OUT_AXIS, AX_RY, -127, 0},
     {"leftjoystick_halfmode", OUT_HALF_LEFT, 0, 0, 0},
     {"rightjoystick_halfmode", OUT_HALF_RIGHT, 0, 0, 0},
+    {"jump", OUT_JUMP, 0, 0, 0}, /* bbport extension: a dedicated jump key */
 };
 
 /* ---- config -------------------------------------------------------------------------------- */
@@ -302,6 +307,11 @@ static void parse_line(Config *c, char *line, const char *file, int lineno) {
         c->square_sticks = !strcmp(in, "square");
         return;
     }
+    if (!strcmp(out, "jump_runup_ms")) { /* bbport extension */
+        float v = (float)atof(in);
+        if (v >= 0 && v <= 2000) c->jump_runup_ms = v;
+        return;
+    }
     if (!strcmp(out, "stick_smoothing_ms")) { /* bbport extension, 0 = instant */
         float v = (float)atof(in);
         if (v >= 0 && v <= 1000) c->smooth_ms = v;
@@ -365,6 +375,7 @@ static void load_config(void) {
     Config *c = calloc(1, sizeof *c);
     c->deadzone_offset = 0.5f; c->speed = 1.0f; c->speed_offset = 0.125f; c->poll_ms = 33;
     c->smooth_ms = 70;
+    c->jump_runup_ms = 400;
     c->key_toggle_capture = 64; c->key_reload = 65; /* F7, F8 */
     wchar_t dir[MAX_PATH], path[MAX_PATH];
     swprintf(dir, MAX_PATH, L"%ls\\input_config", root_dir);
@@ -534,7 +545,7 @@ static void update_snapshot(void) {
     }
 
     float axes[AX_COUNT] = {0};
-    bool used[IN_COUNT] = {0}, half_l = false, half_r = false;
+    bool used[IN_COUNT] = {0}, half_l = false, half_r = false, jump_held = false;
     for (int i = 0; i < cfg.n; i++) {
         const Binding *b = &cfg.b[i];
         bool on = true;
@@ -550,8 +561,28 @@ static void update_snapshot(void) {
         case OUT_AXIS: axes[b->id] += (float)b->value; break;
         case OUT_HALF_LEFT: half_l = true; break;
         case OUT_HALF_RIGHT: half_r = true; break;
+        case OUT_JUMP: jump_held = true; break;
         }
     }
+    /* Jump: Bloodborne jumps on the release of a quick ○ tap while sprinting. The jump key plays
+     * it: ○ off for 60 ms, on for 90 ms, off for 60 ms, then back to the ○ key's own state (a held
+     * sprint goes on after landing). From walking (left stick tilted, ○ not held) ○ is first held
+     * for jump_runup_ms to start the sprint. */
+    if (jump_held && !jump_was_held && !jump_mode) {
+        float lx = axes[AX_LX], ly = axes[AX_LY];
+        if (s.button[BTN_EAST]) { jump_mode = 1; jump_start = t; }
+        else if (lx * lx + ly * ly > 60.0f * 60.0f && cfg.jump_runup_ms > 0) { jump_mode = 2; jump_start = t; }
+    }
+    jump_was_held = jump_held;
+    if (jump_mode) {
+        double e = t - jump_start - (jump_mode == 2 ? cfg.jump_runup_ms : 0);
+        if (e < 0) s.button[BTN_EAST] = true;
+        else if (e < 60) s.button[BTN_EAST] = false;
+        else if (e < 150) s.button[BTN_EAST] = true;
+        else if (e < 210) s.button[BTN_EAST] = false;
+        else jump_mode = 0;
+    }
+
     float mouse_x = mouse_ax, mouse_y = mouse_ay;
     int mouse_stick = cfg.mouse_stick;
     bool square = cfg.square_sticks;
