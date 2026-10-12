@@ -107,6 +107,7 @@ class ControlsForm : Form
     readonly Dictionary<string, TextBox[]> boxes = new Dictionary<string, TextBox[]>();
     readonly ComboBox mouseStick = new ComboBox(), stickShape = new ComboBox();
     readonly NumericUpDown smoothing = Num(0, 1000, 10, 0), jumpRunup = Num(0, 2000, 10, 0);
+    readonly CheckBox menuRelease = new CheckBox { AutoSize = true };
     readonly NumericUpDown deadzone = Num(0, 1, 0.01m, 2), speed = Num(0, 20, 0.1m, 2),
                            speedOffset = Num(0, 1, 0.01m, 3), pollMs = Num(1, 200, 1, 0);
     readonly TextBox hotCapture = Box(), hotReload = Box();
@@ -180,6 +181,10 @@ class ControlsForm : Form
         mouseStick.DropDownStyle = ComboBoxStyle.DropDownList;
         mouseStick.Items.AddRange(new object[] { L.T("Не управляет стиком", "Not used"), L.T("Левый стик", "Left stick"), L.T("Правый стик (камера)", "Right stick (camera)") });
         mouseStick.Width = 190;
+        menuRelease.Text = L.T("Мышь в меню работает на бегу", "Mouse works in menus while moving");
+        AddRow(table, L.T("Клавиши движения в меню игры", "Movement keys in game menus"), menuRelease,
+               L.T("зажатые при открытии меню клавиши движения не мешают курсору, пока их не отпустите (v0.4)",
+                   "movement keys held when a menu opens do not override the pointer until released (v0.4)"));
         AddRow(table, L.T("Движение мыши управляет", "Mouse movement controls"), mouseStick, null);
         AddRow(table, L.T("Мёртвая зона (deadzone offset, 0–1)", "Deadzone offset (0–1)"), deadzone, L.T("минимальный наклон стика при движении мыши", "minimum stick tilt while the mouse moves"));
         AddRow(table, L.T("Скорость (speed)", "Speed"), speed, L.T("чувствительность камеры", "camera sensitivity"));
@@ -304,6 +309,7 @@ class ControlsForm : Form
         stickShape.SelectedIndex = 0;
         smoothing.Value = 70;
         jumpRunup.Value = 0;
+        menuRelease.Checked = true;
         deadzone.Value = 0.5m; speed.Value = 1m; speedOffset.Value = 0.125m; pollMs.Value = 33;
         var other = new List<string>();
         foreach (var raw in text.Replace("\r", "").Split('\n'))
@@ -324,6 +330,7 @@ class ControlsForm : Form
                 continue;
             }
             if (o == "stick_shape") { stickShape.SelectedIndex = i == "square" ? 1 : 0; continue; }
+            if (o == "menu_release_movement") { menuRelease.Checked = i != "0"; continue; }
             if (o == "jump_runup_ms") { decimal v; if (TryDec(i, out v)) jumpRunup.Value = Clamp(jumpRunup, v); continue; }
             if (o == "stick_smoothing_ms") { decimal v; if (TryDec(i, out v)) smoothing.Value = Clamp(smoothing, v); continue; }
             if (o == "mouse_poll_ms") { decimal v; if (TryDec(i, out v)) pollMs.Value = Clamp(pollMs, v); continue; }
@@ -425,6 +432,7 @@ class ControlsForm : Form
         sb.AppendLine("jump_runup_ms = " + jumpRunup.Value);
         sb.AppendLine();
         sb.AppendLine("# Mouse");
+        sb.AppendLine("menu_release_movement = " + (menuRelease.Checked ? "1" : "0") + "   # bbport: held movement keys do not override the menu pointer");
         sb.AppendLine("mouse_to_joystick = " + new[] { "none", "left", "right" }[mouseStick.SelectedIndex]);
         sb.AppendLine(string.Format(System.Globalization.CultureInfo.InvariantCulture, "mouse_movement_params = {0:0.00}, {1:0.0##}, {2:0.000}", deadzone.Value, speed.Value, speedOffset.Value));
         if (pollMs.Value != 33) sb.AppendLine("mouse_poll_ms = " + pollMs.Value);
