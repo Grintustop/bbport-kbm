@@ -115,7 +115,6 @@ typedef struct {
     bool square_sticks; /* stick_shape = square: keyboard diagonals reach the corners, as in shadPS4 */
     float smooth_ms;    /* stick_smoothing_ms: time a key-driven stick needs to turn by 90 degrees */
     float jump_runup_ms; /* jump_runup_ms: sprint before a jump from walking (0 = only while sprinting) */
-    bool menu_release_movement; /* held movement keys do not reach a game menu that opens */
     int key_toggle_capture, key_reload;
     bool uses_mouse, uses_wheel;
 } Config;
@@ -135,6 +134,8 @@ static volatile const uint8_t *prompt_flag;    /* BbOverlay::prompt_active (v0.4
  * captured, and with its mouse_camera=1 the runtime keeps its native mouse camera and owns the
  * capture (the menus keep its mouse pointer). */
 static bool runtime_has_pc_controls, pc_controls_mode, native_mouse_camera;
+static bool debug_log;                 /* BB_KBM_DEBUG=1: mouse / menu state changes in the log */
+static bool (*rt_menu_pointer_in_menu)(void); /* the runtime's own "a game menu is open" (v0.4) */
 static bool mouse_down[8], down_in_game[8]; /* down_in_game: pressed while the mouse was captured */
 static bool last_down_taken; /* the last button press is ours: keep it from the runtime */
 static float acc_dx, acc_dy;
@@ -154,7 +155,6 @@ static float key_stick[2][2]; /* key-driven stick vectors after smoothing */
 static bool jump_was_held;
 static int jump_mode; /* 0 idle, 1 re-tap of a held sprint, 2 run-up then re-tap */
 static double jump_start;
-static bool latched[SC_COUNT], was_game_menu; /* menu_release_movement */
 static double smooth_time = -1e9;
 static bool real_pad_present;
 static double real_pad_check_time = -1e9;
@@ -312,10 +312,6 @@ static void parse_line(Config *c, char *line, const char *file, int lineno) {
         c->square_sticks = !strcmp(in, "square");
         return;
     }
-    if (!strcmp(out, "menu_release_movement")) { /* bbport extension */
-        c->menu_release_movement = atoi(in) != 0;
-        return;
-    }
     if (!strcmp(out, "jump_runup_ms")) { /* bbport extension */
         float v = (float)atof(in);
         if (v >= 0 && v <= 2000) c->jump_runup_ms = v;
@@ -385,7 +381,6 @@ static void load_config(void) {
     c->deadzone_offset = 0.5f; c->speed = 1.0f; c->speed_offset = 0.125f; c->poll_ms = 33;
     c->smooth_ms = 70;
     c->jump_runup_ms = 0;
-    c->menu_release_movement = true;
     c->key_toggle_capture = 64; c->key_reload = 65; /* F7, F8 */
     wchar_t dir[MAX_PATH], path[MAX_PATH];
     swprintf(dir, MAX_PATH, L"%ls\\input_config", root_dir);
@@ -524,27 +519,6 @@ static void update_snapshot(void) {
     if (active) {
         const bool *ks = r_GetKeyboardState(NULL);
         if (ks) for (int i = 0; i < SC_COUNT; i++) pressed[i] = ks[i];
-    }
-
-    /* menu_release_movement: a game menu (the runtime's mouse pointer is on) that opens while
-     * movement / camera keys are held ignores those keys until they are released, so the stick
-     * stays centred and the menu keeps following the mouse. Fresh presses in the menu count, and
-     * the held keys count again once the menu closes. */
-    bool game_menu = cfg.menu_release_movement && native_mouse_camera && active && game_window &&
-                     r_GetWindowRelativeMouseMode && !r_GetWindowRelativeMouseMode(game_window);
-    if (game_menu && !was_game_menu) {
-        for (int i = 0; i < cfg.n; i++) {
-            const Binding *b = &cfg.b[i];
-            if (b->kind != OUT_AXIS || b->id > AX_RY) continue;
-            for (int k = 0; k < b->nkeys; k++)
-                if (b->keys[k] < SC_COUNT && pressed[b->keys[k]]) latched[b->keys[k]] = true;
-        }
-    }
-    if (!game_menu) memset(latched, 0, sizeof latched);
-    was_game_menu = game_menu;
-    for (int i = 0; i < SC_COUNT; i++) {
-        if (latched[i] && !pressed[i]) latched[i] = false;
-        if (latched[i]) pressed[i] = false;
     }
 
     bool wheel_on = active && wheel_in_game();
@@ -893,6 +867,28 @@ static bool hide_from_runtime(const SDL_Event *e) {
     return false;
 }
 
+/* BB_KBM_DEBUG=1 diagnostics (window thread). */
+static void debug_event(const SDL_Event *e, bool hidden) {
+    const uint8_t *p = (const uint8_t *)e;
+    if (e->type == EV_MOUSE_BUTTON_DOWN || e->type == EV_MOUSE_BUTTON_UP)
+        logf_("dbg %.0f: mouse button %u %s -> %s", now_ms(), p[24], e->type == EV_MOUSE_BUTTON_DOWN ? "down" : "up",
+              hidden ? "kept (binding)" : "runtime");
+    else if (e->type == EV_MOUSE_WHEEL)
+        logf_("dbg %.0f: wheel -> %s", now_ms(), hidden ? "kept (binding)" : "runtime");
+}
+
+static void debug_state(void) {
+    static int last = -1;
+    int rel = game_window && r_GetWindowRelativeMouseMode ? r_GetWindowRelativeMouseMode(game_window) : -1;
+    int in_menu = rt_menu_pointer_in_menu ? rt_menu_pointer_in_menu() : -1;
+    int state = (rel + 1) | (in_menu + 1) << 2 | focused << 4 | menu_open() << 5 | mouse_in_game() << 6;
+    if (state != last) {
+        logf_("dbg %.0f: relative=%d game_menu=%d focused=%d overlay=%d mouse_in_game=%d stick L=(%d,%d)", now_ms(), rel,
+              in_menu, focused, menu_open(), mouse_in_game(), snap.axis[AX_LX] / 256, snap.axis[AX_LY] / 256);
+        last = state;
+    }
+}
+
 EXPORT bool SDL_PollEvent(SDL_Event *e) {
     ENSURE();
     for (;;) {
@@ -900,9 +896,12 @@ EXPORT bool SDL_PollEvent(SDL_Event *e) {
         if (enabled) {
             if (r && e) {
                 handle_event(e);
-                if (hide_from_runtime(e)) continue;
+                bool hidden = hide_from_runtime(e);
+                if (debug_log) debug_event(e, hidden);
+                if (hidden) continue;
             }
             update_capture();
+            if (debug_log) debug_state();
         }
         return r;
     }
@@ -979,17 +978,19 @@ static void scan_symbols(const SymWant *want, int nwant) {
 static void find_runtime(void) {
     uint8_t *base = (uint8_t *)GetModuleHandleW(NULL);
     if (!base) return;
-    uint32_t menu = 0, prompt = 0, pc_input = 0, touch = 0;
+    uint32_t menu = 0, prompt = 0, pc_input = 0, touch = 0, in_menu_fn = 0;
     SymWant want[] = {
         {"_ZN9BbOverlay12_GLOBAL__N_19menu_openE", &menu},
         {"_ZN9BbOverlay12_GLOBAL__N_113prompt_activeE", &prompt},
         {"pad_read_state", &rva_pad_read_state},
         {"bbgpu_pc_input", &pc_input},
         {"touch_ids", &touch},
+        {"_Z20menu_pointer_in_menuv", &in_menu_fn},
     };
     scan_symbols(want, sizeof want / sizeof *want);
     runtime_has_pc_controls = pc_input != 0;
     runtime_has_touch_ids = touch != 0;
+    if (in_menu_fn) rt_menu_pointer_in_menu = (bool (*)(void))(void *)(base + in_menu_fn);
     if (menu) {
         menu_open_flag = base + menu;
         if (prompt) prompt_flag = base + prompt;
@@ -1120,6 +1121,7 @@ static BOOL CALLBACK init(PINIT_ONCE once, PVOID param, PVOID *ctx) {
 
     wchar_t env[8];
     if (GetEnvironmentVariableW(L"BB_KBM", env, 8) && env[0] == L'0') enabled = false;
+    if (GetEnvironmentVariableW(L"BB_KBM_DEBUG", env, 8) && env[0] == L'1') debug_log = true;
     if (!real_sdl) { logf_("SDL3_real.dll not found next to SDL3.dll"); enabled = false; return TRUE; }
 
     LOAD(r_GetGamepads, "SDL_GetGamepads");

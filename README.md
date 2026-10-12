@@ -88,7 +88,6 @@ Extra options of this add-on (ignored by shadPS4):
 | `stick_smoothing_ms` | `70` | Time for a key-driven stick to turn by 90°. `0` = instant. Suggested: 90 and 60 FPS — 40, 30 FPS — 70. |
 | `stick_shape` | `circle` | `circle`: W+A tilts the stick like a real thumb (≈ 0.71, 0.71). `square`: corners, like shadPS4. |
 | `mouse_poll_ms` | `33` | Mouse sampling period (shadPS4 uses 33 ms). |
-| `menu_release_movement` | `1` | v0.4: movement keys held when a game menu opens are ignored until released, so they do not take the menu away from the mouse pointer. |
 | `jump = key` | — | A dedicated jump key (see below). |
 | `jump_runup_ms` | `0` | `0`: the jump key works while sprinting. Above `0` it also starts a sprint and jumps from walking (about `600` feels right). |
 
