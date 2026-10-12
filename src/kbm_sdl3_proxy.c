@@ -116,6 +116,7 @@ typedef struct {
     float smooth_ms;    /* stick_smoothing_ms: time a key-driven stick needs to turn by 90 degrees */
     float jump_runup_ms; /* jump_runup_ms: sprint before a jump from walking (0 = only while sprinting) */
     bool menu_mouse_while_moving; /* v0.4: the menu pointer also works while the left stick is tilted */
+    int menu_pointer_linger_ms;   /* v0.4: how long a closed menu keeps the pointer (port: 400 ms) */
     int key_toggle_capture, key_reload;
     bool uses_mouse, uses_wheel;
 } Config;
@@ -138,6 +139,7 @@ static bool runtime_has_pc_controls, pc_controls_mode, native_mouse_camera;
 static bool debug_log;                 /* BB_KBM_DEBUG=1: mouse / menu state changes in the log */
 static bool (*rt_menu_pointer_in_menu)(void); /* the runtime's own "a game menu is open" (v0.4) */
 static void apply_direction_patch(bool on);
+static void apply_linger_patch(int ms);
 static bool mouse_down[8], down_in_game[8]; /* down_in_game: pressed while the mouse was captured */
 static bool last_down_taken; /* the last button press is ours: keep it from the runtime */
 static float acc_dx, acc_dy;
@@ -314,6 +316,11 @@ static void parse_line(Config *c, char *line, const char *file, int lineno) {
         c->square_sticks = !strcmp(in, "square");
         return;
     }
+    if (!strcmp(out, "menu_pointer_linger_ms")) { /* bbport extension */
+        int v = atoi(in);
+        if (v >= 0 && v <= 2000) c->menu_pointer_linger_ms = v;
+        return;
+    }
     if (!strcmp(out, "menu_mouse_while_moving")) { /* bbport extension */
         c->menu_mouse_while_moving = atoi(in) != 0;
         return;
@@ -388,6 +395,7 @@ static void load_config(void) {
     c->smooth_ms = 70;
     c->jump_runup_ms = 0;
     c->menu_mouse_while_moving = true;
+    c->menu_pointer_linger_ms = 80;
     c->key_toggle_capture = 64; c->key_reload = 65; /* F7, F8 */
     wchar_t dir[MAX_PATH], path[MAX_PATH];
     swprintf(dir, MAX_PATH, L"%ls\\input_config", root_dir);
@@ -523,6 +531,7 @@ static void update_snapshot(void) {
         load_config();
         detect_pc_controls();
         apply_direction_patch(cfg.menu_mouse_while_moving);
+        apply_linger_patch(cfg.menu_pointer_linger_ms);
     }
 
     Snapshot s = {0};
@@ -1029,6 +1038,32 @@ static void apply_direction_patch(bool on) {
     logf_("Menu pointer while moving: %s", on ? "on (the left stick no longer blocks it)" : "off (as in the port)");
 }
 
+/* ---- pointer linger after a menu closes (v0.4) ----------------------------------------------
+ * menu_pointer_in_menu() keeps reporting a menu for 400 ms after the last list update (cmp rdx,
+ * 0x190), so the pointer stayed on screen after closing the inventory. The constant is patched to
+ * menu_pointer_linger_ms (default 80 ms: more than two frames at 30 FPS, so menus do not flicker). */
+static uint8_t *linger_imm;
+
+static void find_linger_patch(uint8_t *fn) {
+    static const uint8_t sig[] = {0x48, 0x81, 0xfa, 0x90, 0x01, 0x00, 0x00, 0x0f, 0x9c, 0xc0}; /* cmp rdx,400; setl al */
+    for (int i = 0; i < 0x200; i++)
+        if (!memcmp(fn + i, sig, sizeof sig)) { linger_imm = fn + i + 3; return; }
+    logf_("Menu pointer: linger constant not recognised, the pointer stays 400 ms after menus");
+}
+
+static void apply_linger_patch(int ms) {
+    if (!linger_imm) return;
+    int32_t cur;
+    memcpy(&cur, linger_imm, 4);
+    if (cur == ms) return;
+    DWORD old;
+    if (!VirtualProtect(linger_imm, 4, PAGE_EXECUTE_READWRITE, &old)) return;
+    memcpy(linger_imm, &ms, 4);
+    VirtualProtect(linger_imm, 4, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), linger_imm, 4);
+    logf_("Menu pointer: hidden %d ms after a menu closes (port: 400)", ms);
+}
+
 static void find_runtime(void) {
     uint8_t *base = (uint8_t *)GetModuleHandleW(NULL);
     if (!base) return;
@@ -1046,6 +1081,7 @@ static void find_runtime(void) {
     runtime_has_pc_controls = pc_input != 0;
     runtime_has_touch_ids = touch != 0;
     if (in_menu_fn) rt_menu_pointer_in_menu = (bool (*)(void))(void *)(base + in_menu_fn);
+    if (in_menu_fn) find_linger_patch(base + in_menu_fn);
     if (dir_held) find_direction_patch(base + dir_held);
     if (menu) {
         menu_open_flag = base + menu;
@@ -1210,6 +1246,7 @@ static BOOL CALLBACK init(PINIT_ONCE once, PVOID param, PVOID *ctx) {
         detect_pc_controls();
         hook_pad_read_state();
         apply_direction_patch(cfg.menu_mouse_while_moving);
+        apply_linger_patch(cfg.menu_pointer_linger_ms);
     }
     return TRUE;
 }

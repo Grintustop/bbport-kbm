@@ -89,6 +89,7 @@ Extra options of this add-on (ignored by shadPS4):
 | `stick_shape` | `circle` | `circle`: W+A tilts the stick like a real thumb (≈ 0.71, 0.71). `square`: corners, like shadPS4. |
 | `mouse_poll_ms` | `33` | Mouse sampling period (shadPS4 uses 33 ms). |
 | `menu_mouse_while_moving` | `1` | v0.4: the port's menu pointer ignores hovering and clicks while a direction is held — a d-pad button or the left stick past half — so the inventory could not be used with the mouse while walking. `1` drops the stick from that check (a small in-memory patch of the port's `direction_held`); the d-pad still takes priority over the mouse. `0`: as in the port. |
+| `menu_pointer_linger_ms` | `80` | v0.4: how long the mouse pointer stays after a game menu closes. The port keeps it 400 ms after the last menu list update; the layer shortens that (an in-memory patch of the constant). |
 | `jump = key` | — | A dedicated jump key (see below). |
 | `jump_runup_ms` | `0` | `0`: the jump key works while sprinting. Above `0` it also starts a sprint and jumps from walking (about `600` feels right). |
 
