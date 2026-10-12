@@ -14,6 +14,7 @@ static class Program
     [STAThread]
     static void Main()
     {
+        D.Init();
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
         ControlsForm form;
@@ -23,6 +24,27 @@ static class Program
 
 // Interface language: Russian on Russian Windows, English otherwise. The button in the window
 // switches it and remembers the choice in input_config\editor-language.txt.
+// High DPI: the process tells Windows it scales itself (otherwise Windows stretches the window as
+// a bitmap and the text looks blurry on 125-150 % displays); pixel sizes go through D.S.
+static class D
+{
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool SetProcessDpiAwarenessContext(IntPtr value);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool SetProcessDPIAware();
+    public static float K = 1f;
+
+    public static void Init()
+    {
+        try { if (!SetProcessDpiAwarenessContext(new IntPtr(-2))) SetProcessDPIAware(); } // -2: system aware
+        catch (EntryPointNotFoundException) { try { SetProcessDPIAware(); } catch { } }
+        using (var g = Graphics.FromHwnd(IntPtr.Zero)) K = g.DpiX / 96f;
+    }
+
+    public static int S(int px) { return (int)Math.Round(px * K); }
+    public static Size Sz(int w, int h) { return new Size(S(w), S(h)); }
+    public static Padding Pad(int all) { return new Padding(S(all)); }
+    public static Padding Pad(int l, int t, int r, int b) { return new Padding(S(l), S(t), S(r), S(b)); }
+}
+
 static class L
 {
     public static bool En;
@@ -108,6 +130,7 @@ class ControlsForm : Form
     readonly ComboBox mouseStick = new ComboBox(), stickShape = new ComboBox();
     readonly NumericUpDown smoothing = Num(0, 1000, 10, 0), jumpRunup = Num(0, 2000, 10, 0);
     readonly CheckBox menuMouse = new CheckBox { AutoSize = true };
+    readonly NumericUpDown lingerMs = Num(0, 2000, 10, 0);
     readonly NumericUpDown deadzone = Num(0, 1, 0.01m, 2), speed = Num(0, 20, 0.1m, 2),
                            speedOffset = Num(0, 1, 0.01m, 3), pollMs = Num(1, 200, 1, 0);
     readonly TextBox hotCapture = Box(), hotReload = Box();
@@ -117,12 +140,12 @@ class ControlsForm : Form
 
     static NumericUpDown Num(decimal min, decimal max, decimal inc, int dec)
     {
-        return new NumericUpDown { Minimum = min, Maximum = max, Increment = inc, DecimalPlaces = dec, Width = 80 };
+        return new NumericUpDown { Minimum = min, Maximum = max, Increment = inc, DecimalPlaces = dec, Width = D.S(80) };
     }
 
     static TextBox Box()
     {
-        return new TextBox { ReadOnly = true, Width = 190, BackColor = SystemColors.Window, Cursor = Cursors.Hand };
+        return new TextBox { ReadOnly = true, Width = D.S(190), BackColor = SystemColors.Window, Cursor = Cursors.Hand };
     }
 
     public ControlsForm()
@@ -138,15 +161,15 @@ class ControlsForm : Form
         Text = L.T("Bloodborne PC — управление (клавиатура и мышь)", "Bloodborne PC — keyboard & mouse controls");
         Font = new Font("Segoe UI", 9f);
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(720, 760);
-        MinimumSize = new Size(640, 500);
+        ClientSize = D.Sz(720, 760);
+        MinimumSize = D.Sz(640, 500);
         try { Icon = Icon.ExtractAssociatedIcon(Path.Combine(root, "BloodborneLauncher.exe")); } catch { }
 
-        var scroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true, Padding = new Padding(12, 8, 12, 8) };
+        var scroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true, Padding = D.Pad(12, 8, 12, 8) };
         var table = new TableLayoutPanel { ColumnCount = 3, AutoSize = true, Dock = DockStyle.Top };
-        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 250));
-        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 210));
-        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 210));
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, D.S(250)));
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, D.S(210)));
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, D.S(210)));
 
         AddHeader(table, L.T("Действие (кнопка геймпада PS4)", "Action (PS4 gamepad button)"), L.T("Клавиша / кнопка мыши", "Key / mouse button"), L.T("Дополнительно", "Alternative"));
         string group = null;
@@ -155,14 +178,14 @@ class ControlsForm : Form
             if (a.Group != group) { group = a.Group; AddGroup(table, group); }
             var pair = new[] { Box(), Box() };
             boxes[a.Output] = pair;
-            table.Controls.Add(new Label { Text = a.Label, AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(3, 7, 3, 3) });
+            table.Controls.Add(new Label { Text = a.Label, AutoSize = true, Anchor = AnchorStyles.Left, Margin = D.Pad(3, 7, 3, 3) });
             for (int i = 0; i < 2; i++) { Hook(pair[i], a.Label); table.Controls.Add(pair[i]); }
         }
 
         AddGroup(table, L.T("Стики с клавиатуры", "Sticks driven by keys"));
         stickShape.DropDownStyle = ComboBoxStyle.DropDownList;
         stickShape.Items.AddRange(new object[] { L.T("Круг (как у геймпада)", "Circle (like a gamepad)"), L.T("Квадрат (как в shadPS4)", "Square (like shadPS4)") });
-        stickShape.Width = 190;
+        stickShape.Width = D.S(190);
         AddRow(table, L.T("Форма диагоналей", "Diagonal shape"), stickShape, L.T("круг: W+A наклоняет стик как настоящий палец", "circle: W+A tilts the stick like a real thumb"));
         AddRow(table, L.T("Плавность поворота, мс на 90°", "Turn smoothing, ms per 90°"), smoothing, L.T("убирает спотыкание при W→W+A на бегу. Рекомендуется: 90 и 60 FPS — 40 мс, 30 FPS — 70 мс; 0 — мгновенно", "removes the stumble on W→W+A while sprinting. Suggested: 90 and 60 FPS — 40 ms, 30 FPS — 70 ms; 0 = instant"));
 
@@ -175,16 +198,19 @@ class ControlsForm : Form
         string mode = MouseModeText();
         if (mode != null)
         {
-            table.Controls.Add(new Label { Text = mode, AutoSize = true, MaximumSize = new Size(660, 0), ForeColor = Color.FromArgb(40, 80, 140), Margin = new Padding(3, 0, 3, 6) });
+            table.Controls.Add(new Label { Text = mode, AutoSize = true, MaximumSize = D.Sz(660, 0), ForeColor = Color.FromArgb(40, 80, 140), Margin = D.Pad(3, 0, 3, 6) });
             table.SetColumnSpan(table.Controls[table.Controls.Count - 1], 3);
         }
         mouseStick.DropDownStyle = ComboBoxStyle.DropDownList;
         mouseStick.Items.AddRange(new object[] { L.T("Не управляет стиком", "Not used"), L.T("Левый стик", "Left stick"), L.T("Правый стик (камера)", "Right stick (camera)") });
-        mouseStick.Width = 190;
+        mouseStick.Width = D.S(190);
         menuMouse.Text = L.T("Мышь в меню работает на ходу", "Mouse works in menus while moving");
         AddRow(table, L.T("Мышь в меню игры (v0.4)", "Mouse in game menus (v0.4)"), menuMouse,
                L.T("порт игнорирует наведение и клики мыши в меню, пока зажато движение. Включено: мышь выбирает ячейки и на ходу; крестовина по-прежнему главнее мыши",
                    "the port ignores hovering and clicks in menus while movement is held. On: the mouse selects items while moving too; the d-pad still takes priority"));
+        AddRow(table, L.T("Курсор после закрытия меню, мс", "Pointer after a menu closes, ms"), lingerMs,
+               L.T("сколько курсор остаётся на экране после закрытия меню (в порте 400). Если курсор мигает при переходах в меню — увеличьте (v0.4)",
+                   "how long the pointer stays after a menu closes (the port uses 400). Raise it if the pointer flickers between menu pages (v0.4)"));
         AddRow(table, L.T("Движение мыши управляет", "Mouse movement controls"), mouseStick, null);
         AddRow(table, L.T("Мёртвая зона (deadzone offset, 0–1)", "Deadzone offset (0–1)"), deadzone, L.T("минимальный наклон стика при движении мыши", "minimum stick tilt while the mouse moves"));
         AddRow(table, L.T("Скорость (speed)", "Speed"), speed, L.T("чувствительность камеры", "camera sensitivity"));
@@ -202,12 +228,12 @@ class ControlsForm : Form
                        "и нажмите клавишу или кнопку мыши. Меню порта: Insert. В меню и вне фокуса мышь освобождается.",
                        "Click a field to bind it (Delete clears it). For a combination hold Shift/Ctrl/Alt " +
                        "and press a key or mouse button. Port menu: Insert. The mouse is released in the menu and when the game loses focus."),
-            AutoSize = true, MaximumSize = new Size(660, 0), ForeColor = SystemColors.GrayText, Margin = new Padding(3, 12, 3, 3)
+            AutoSize = true, MaximumSize = D.Sz(660, 0), ForeColor = SystemColors.GrayText, Margin = D.Pad(3, 12, 3, 3)
         });
         table.SetColumnSpan(table.Controls[table.Controls.Count - 1], 3);
         scroll.Controls.Add(table);
 
-        var bottom = new FlowLayoutPanel { Dock = DockStyle.Bottom, FlowDirection = FlowDirection.RightToLeft, AutoSize = true, Padding = new Padding(8) };
+        var bottom = new FlowLayoutPanel { Dock = DockStyle.Bottom, FlowDirection = FlowDirection.RightToLeft, AutoSize = true, Padding = D.Pad(8) };
         var save = new Button { Text = L.T("Сохранить", "Save"), AutoSize = true };
         save.Click += (s, e) => Save();
         var import = new Button { Text = L.T("Импорт из shadPS4", "Import from shadPS4"), AutoSize = true };
@@ -217,7 +243,7 @@ class ControlsForm : Form
         var reload = new Button { Text = L.T("Отменить изменения", "Revert changes"), AutoSize = true };
         reload.Click += (s, e) => LoadFiles();
         status.AutoSize = true;
-        status.Margin = new Padding(3, 8, 20, 3);
+        status.Margin = D.Pad(3, 8, 20, 3);
         var lang = new Button { Text = L.T("English", "Русский"), AutoSize = true };
         lang.Click += (s, e) =>
         {
@@ -235,21 +261,21 @@ class ControlsForm : Form
 
     void AddHeader(TableLayoutPanel t, params string[] texts)
     {
-        foreach (var s in texts) t.Controls.Add(new Label { Text = s, AutoSize = true, Font = new Font(Font, FontStyle.Bold), Margin = new Padding(3, 3, 3, 6) });
+        foreach (var s in texts) t.Controls.Add(new Label { Text = s, AutoSize = true, Font = new Font(Font, FontStyle.Bold), Margin = D.Pad(3, 3, 3, 6) });
     }
 
     void AddGroup(TableLayoutPanel t, string text)
     {
-        var l = new Label { Text = text, AutoSize = true, Font = new Font(Font.FontFamily, 10.5f, FontStyle.Bold), ForeColor = Color.FromArgb(140, 20, 20), Margin = new Padding(3, 14, 3, 4) };
+        var l = new Label { Text = text, AutoSize = true, Font = new Font(Font.FontFamily, 10.5f, FontStyle.Bold), ForeColor = Color.FromArgb(140, 20, 20), Margin = D.Pad(3, 14, 3, 4) };
         t.Controls.Add(l);
         t.SetColumnSpan(l, 3);
     }
 
     void AddRow(TableLayoutPanel t, string label, Control c, string hint)
     {
-        t.Controls.Add(new Label { Text = label, AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(3, 7, 3, 3) });
+        t.Controls.Add(new Label { Text = label, AutoSize = true, Anchor = AnchorStyles.Left, Margin = D.Pad(3, 7, 3, 3) });
         t.Controls.Add(c);
-        t.Controls.Add(new Label { Text = hint ?? "", AutoSize = true, Anchor = AnchorStyles.Left, ForeColor = SystemColors.GrayText, MaximumSize = new Size(205, 0) });
+        t.Controls.Add(new Label { Text = hint ?? "", AutoSize = true, Anchor = AnchorStyles.Left, ForeColor = SystemColors.GrayText, MaximumSize = D.Sz(205, 0) });
     }
 
     void Hook(TextBox box, string title)
@@ -310,6 +336,7 @@ class ControlsForm : Form
         smoothing.Value = 70;
         jumpRunup.Value = 0;
         menuMouse.Checked = true;
+        lingerMs.Value = 80;
         deadzone.Value = 0.5m; speed.Value = 1m; speedOffset.Value = 0.125m; pollMs.Value = 33;
         var other = new List<string>();
         foreach (var raw in text.Replace("\r", "").Split('\n'))
@@ -330,6 +357,7 @@ class ControlsForm : Form
                 continue;
             }
             if (o == "stick_shape") { stickShape.SelectedIndex = i == "square" ? 1 : 0; continue; }
+            if (o == "menu_pointer_linger_ms") { decimal v; if (TryDec(i, out v)) lingerMs.Value = Clamp(lingerMs, v); continue; }
             if (o == "menu_mouse_while_moving") { menuMouse.Checked = i != "0"; continue; }
             if (o == "jump_runup_ms") { decimal v; if (TryDec(i, out v)) jumpRunup.Value = Clamp(jumpRunup, v); continue; }
             if (o == "stick_smoothing_ms") { decimal v; if (TryDec(i, out v)) smoothing.Value = Clamp(smoothing, v); continue; }
@@ -434,6 +462,7 @@ class ControlsForm : Form
         sb.AppendLine("# Mouse");
         sb.AppendLine("# bbport, v0.4: the menu mouse pointer also works while moving (1) or only when standing (0)");
         sb.AppendLine("menu_mouse_while_moving = " + (menuMouse.Checked ? "1" : "0"));
+        sb.AppendLine("menu_pointer_linger_ms = " + lingerMs.Value);
         sb.AppendLine("mouse_to_joystick = " + new[] { "none", "left", "right" }[mouseStick.SelectedIndex]);
         sb.AppendLine(string.Format(System.Globalization.CultureInfo.InvariantCulture, "mouse_movement_params = {0:0.00}, {1:0.0##}, {2:0.000}", deadzone.Value, speed.Value, speedOffset.Value));
         if (pollMs.Value != 33) sb.AppendLine("mouse_poll_ms = " + pollMs.Value);
@@ -510,7 +539,7 @@ class KeyCapture : Form, IMessageFilter
         MaximizeBox = MinimizeBox = false;
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.CenterParent;
-        ClientSize = new Size(420, 170);
+        ClientSize = D.Sz(420, 170);
         KeyPreview = true;
         info = new Label
         {
@@ -521,7 +550,7 @@ class KeyCapture : Form, IMessageFilter
                        "Combination: hold Shift / Ctrl / Alt.")
         };
         // Esc is a bindable key (e.g. Options), so cancelling is a button; its clicks are not captured.
-        cancel = new Button { Text = L.T("Отмена", "Cancel"), Dock = DockStyle.Bottom, Height = 32 };
+        cancel = new Button { Text = L.T("Отмена", "Cancel"), Dock = DockStyle.Bottom, Height = D.S(32) };
         cancel.Click += (s, e) => { DialogResult = DialogResult.Cancel; };
         Controls.Add(info);
         Controls.Add(cancel);
