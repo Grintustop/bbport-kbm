@@ -178,7 +178,7 @@ class ControlsForm : Form
             if (a.Group != group) { group = a.Group; AddGroup(table, group); }
             var pair = new[] { Box(), Box() };
             boxes[a.Output] = pair;
-            table.Controls.Add(new Label { Text = a.Label, AutoSize = true, Anchor = AnchorStyles.Left, Margin = D.Pad(3, 7, 3, 3) });
+            table.Controls.Add(new Label { Text = a.Label, AutoSize = true, Anchor = AnchorStyles.Left | AnchorStyles.Top, Margin = D.Pad(3, 7, 3, 3) });
             for (int i = 0; i < 2; i++) { Hook(pair[i], a.Label); table.Controls.Add(pair[i]); }
         }
 
@@ -271,11 +271,15 @@ class ControlsForm : Form
         t.SetColumnSpan(l, 3);
     }
 
+    // Label, control and hint are aligned to the top of the row: a long hint makes the row taller,
+    // and centred labels then drifted below their fields.
     void AddRow(TableLayoutPanel t, string label, Control c, string hint)
     {
-        t.Controls.Add(new Label { Text = label, AutoSize = true, Anchor = AnchorStyles.Left, Margin = D.Pad(3, 7, 3, 3) });
+        t.Controls.Add(new Label { Text = label, AutoSize = true, Anchor = AnchorStyles.Left | AnchorStyles.Top, Margin = D.Pad(3, 7, 3, 3) });
+        c.Anchor = AnchorStyles.Left | AnchorStyles.Top;
+        if (c is CheckBox) c.Margin = D.Pad(3, 6, 3, 3);
         t.Controls.Add(c);
-        t.Controls.Add(new Label { Text = hint ?? "", AutoSize = true, Anchor = AnchorStyles.Left, ForeColor = SystemColors.GrayText, MaximumSize = D.Sz(205, 0) });
+        t.Controls.Add(new Label { Text = hint ?? "", AutoSize = true, Anchor = AnchorStyles.Left | AnchorStyles.Top, ForeColor = SystemColors.GrayText, MaximumSize = D.Sz(205, 0), Margin = D.Pad(3, 7, 3, 10) });
     }
 
     void Hook(TextBox box, string title)
