@@ -107,7 +107,7 @@ class ControlsForm : Form
     readonly Dictionary<string, TextBox[]> boxes = new Dictionary<string, TextBox[]>();
     readonly ComboBox mouseStick = new ComboBox(), stickShape = new ComboBox();
     readonly NumericUpDown smoothing = Num(0, 1000, 10, 0), jumpRunup = Num(0, 2000, 10, 0);
-    readonly CheckBox menuStops = new CheckBox { AutoSize = true };
+    readonly CheckBox menuMouse = new CheckBox { AutoSize = true };
     readonly NumericUpDown deadzone = Num(0, 1, 0.01m, 2), speed = Num(0, 20, 0.1m, 2),
                            speedOffset = Num(0, 1, 0.01m, 3), pollMs = Num(1, 200, 1, 0);
     readonly TextBox hotCapture = Box(), hotReload = Box();
@@ -181,10 +181,10 @@ class ControlsForm : Form
         mouseStick.DropDownStyle = ComboBoxStyle.DropDownList;
         mouseStick.Items.AddRange(new object[] { L.T("Не управляет стиком", "Not used"), L.T("Левый стик", "Left stick"), L.T("Правый стик (камера)", "Right stick (camera)") });
         mouseStick.Width = 190;
-        menuStops.Text = L.T("Персонаж останавливается в меню", "Character stops in menus");
-        AddRow(table, L.T("Мышь в меню игры (v0.4)", "Mouse in game menus (v0.4)"), menuStops,
-               L.T("игра не слушает мышь в меню, пока персонаж идёт. Включено: в меню клавиши движения не двигают персонажа и мышь работает сразу; выключено: персонаж идёт, мышь работает, когда стоите",
-                   "the game ignores the mouse in menus while the character moves. On: movement keys do not move the character in menus and the mouse works at once; off: the character keeps moving, the mouse works when standing"));
+        menuMouse.Text = L.T("Мышь в меню работает на ходу", "Mouse works in menus while moving");
+        AddRow(table, L.T("Мышь в меню игры (v0.4)", "Mouse in game menus (v0.4)"), menuMouse,
+               L.T("порт игнорирует наведение и клики мыши в меню, пока зажато движение. Включено: мышь выбирает ячейки и на ходу; крестовина по-прежнему главнее мыши",
+                   "the port ignores hovering and clicks in menus while movement is held. On: the mouse selects items while moving too; the d-pad still takes priority"));
         AddRow(table, L.T("Движение мыши управляет", "Mouse movement controls"), mouseStick, null);
         AddRow(table, L.T("Мёртвая зона (deadzone offset, 0–1)", "Deadzone offset (0–1)"), deadzone, L.T("минимальный наклон стика при движении мыши", "minimum stick tilt while the mouse moves"));
         AddRow(table, L.T("Скорость (speed)", "Speed"), speed, L.T("чувствительность камеры", "camera sensitivity"));
@@ -309,7 +309,7 @@ class ControlsForm : Form
         stickShape.SelectedIndex = 0;
         smoothing.Value = 70;
         jumpRunup.Value = 0;
-        menuStops.Checked = true;
+        menuMouse.Checked = true;
         deadzone.Value = 0.5m; speed.Value = 1m; speedOffset.Value = 0.125m; pollMs.Value = 33;
         var other = new List<string>();
         foreach (var raw in text.Replace("\r", "").Split('\n'))
@@ -330,7 +330,7 @@ class ControlsForm : Form
                 continue;
             }
             if (o == "stick_shape") { stickShape.SelectedIndex = i == "square" ? 1 : 0; continue; }
-            if (o == "menu_stops_movement") { menuStops.Checked = i != "0"; continue; }
+            if (o == "menu_mouse_while_moving") { menuMouse.Checked = i != "0"; continue; }
             if (o == "jump_runup_ms") { decimal v; if (TryDec(i, out v)) jumpRunup.Value = Clamp(jumpRunup, v); continue; }
             if (o == "stick_smoothing_ms") { decimal v; if (TryDec(i, out v)) smoothing.Value = Clamp(smoothing, v); continue; }
             if (o == "mouse_poll_ms") { decimal v; if (TryDec(i, out v)) pollMs.Value = Clamp(pollMs, v); continue; }
@@ -432,8 +432,8 @@ class ControlsForm : Form
         sb.AppendLine("jump_runup_ms = " + jumpRunup.Value);
         sb.AppendLine();
         sb.AppendLine("# Mouse");
-        sb.AppendLine("# bbport, v0.4: game menus stop the character so the mouse pointer works (1) or not (0)");
-        sb.AppendLine("menu_stops_movement = " + (menuStops.Checked ? "1" : "0"));
+        sb.AppendLine("# bbport, v0.4: the menu mouse pointer also works while moving (1) or only when standing (0)");
+        sb.AppendLine("menu_mouse_while_moving = " + (menuMouse.Checked ? "1" : "0"));
         sb.AppendLine("mouse_to_joystick = " + new[] { "none", "left", "right" }[mouseStick.SelectedIndex]);
         sb.AppendLine(string.Format(System.Globalization.CultureInfo.InvariantCulture, "mouse_movement_params = {0:0.00}, {1:0.0##}, {2:0.000}", deadzone.Value, speed.Value, speedOffset.Value));
         if (pollMs.Value != 33) sb.AppendLine("mouse_poll_ms = " + pollMs.Value);

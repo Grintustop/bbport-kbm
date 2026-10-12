@@ -115,7 +115,7 @@ typedef struct {
     bool square_sticks; /* stick_shape = square: keyboard diagonals reach the corners, as in shadPS4 */
     float smooth_ms;    /* stick_smoothing_ms: time a key-driven stick needs to turn by 90 degrees */
     float jump_runup_ms; /* jump_runup_ms: sprint before a jump from walking (0 = only while sprinting) */
-    bool menu_stops_movement; /* game menus centre the key-driven sticks so the mouse pointer works */
+    bool menu_mouse_while_moving; /* v0.4: the menu pointer also works while the left stick is tilted */
     int key_toggle_capture, key_reload;
     bool uses_mouse, uses_wheel;
 } Config;
@@ -137,6 +137,7 @@ static volatile const uint8_t *prompt_flag;    /* BbOverlay::prompt_active (v0.4
 static bool runtime_has_pc_controls, pc_controls_mode, native_mouse_camera;
 static bool debug_log;                 /* BB_KBM_DEBUG=1: mouse / menu state changes in the log */
 static bool (*rt_menu_pointer_in_menu)(void); /* the runtime's own "a game menu is open" (v0.4) */
+static void apply_direction_patch(bool on);
 static bool mouse_down[8], down_in_game[8]; /* down_in_game: pressed while the mouse was captured */
 static bool last_down_taken; /* the last button press is ours: keep it from the runtime */
 static float acc_dx, acc_dy;
@@ -313,8 +314,8 @@ static void parse_line(Config *c, char *line, const char *file, int lineno) {
         c->square_sticks = !strcmp(in, "square");
         return;
     }
-    if (!strcmp(out, "menu_stops_movement")) { /* bbport extension */
-        c->menu_stops_movement = atoi(in) != 0;
+    if (!strcmp(out, "menu_mouse_while_moving")) { /* bbport extension */
+        c->menu_mouse_while_moving = atoi(in) != 0;
         return;
     }
     if (!strcmp(out, "jump_runup_ms")) { /* bbport extension */
@@ -386,7 +387,7 @@ static void load_config(void) {
     c->deadzone_offset = 0.5f; c->speed = 1.0f; c->speed_offset = 0.125f; c->poll_ms = 33;
     c->smooth_ms = 70;
     c->jump_runup_ms = 0;
-    c->menu_stops_movement = true;
+    c->menu_mouse_while_moving = true;
     c->key_toggle_capture = 64; c->key_reload = 65; /* F7, F8 */
     wchar_t dir[MAX_PATH], path[MAX_PATH];
     swprintf(dir, MAX_PATH, L"%ls\\input_config", root_dir);
@@ -517,7 +518,12 @@ static void update_snapshot(void) {
     double t = now_ms();
     if (t - snap_time < 1.0) return;
     snap_time = t;
-    if (reload_requested) { reload_requested = false; load_config(); detect_pc_controls(); }
+    if (reload_requested) {
+        reload_requested = false;
+        load_config();
+        detect_pc_controls();
+        apply_direction_patch(cfg.menu_mouse_while_moving);
+    }
 
     Snapshot s = {0};
     bool active = focused && !menu_open();
@@ -574,14 +580,6 @@ static void update_snapshot(void) {
         case OUT_HALF_RIGHT: half_r = true; break;
         case OUT_JUMP: jump_held = true; break;
         }
-    }
-    /* menu_stops_movement: the game ignores the mouse pointer in its menus while the movement stick
-     * is tilted (the port's own PC controls stop the character in menus for that reason). While the
-     * runtime reports a game menu, key-driven sticks are centred; held keys count again when the
-     * menu closes. Off: the character keeps moving and the mouse works once the keys are released. */
-    if (cfg.menu_stops_movement && native_mouse_camera && rt_menu_pointer_in_menu && rt_menu_pointer_in_menu()) {
-        axes[AX_LX] = axes[AX_LY] = axes[AX_RX] = axes[AX_RY] = 0;
-        jump_held = false;
     }
     /* Jump: Bloodborne jumps on the release of a quick ○ tap while sprinting. The jump key plays
      * it: ○ off for 60 ms, on for 90 ms, off for 60 ms, then back to the ○ key's own state (a held
@@ -989,10 +987,52 @@ static void scan_symbols(const SymWant *want, int nwant) {
     free(buf);
 }
 
+/* ---- menu pointer while moving (v0.4) --------------------------------------------------------
+ * The port's menu pointer (gpu/shim/input/menu_pointer.cpp, pc_list_update) ignores hovering and
+ * clicks while direction_held() is true: a d-pad button, or the left stick tilted past half. With
+ * movement on the left stick, the inventory could not be used with the mouse while walking. The
+ * stick part of direction_held is replaced by "not held" (xor eax, eax + nops); the d-pad part stays,
+ * so d-pad navigation still wins over the pointer. Matched by its bytes; undone when switched off. */
+static uint8_t *dir_patch_at;
+static uint8_t dir_patch_orig[19];
+static bool dir_patch_on;
+
+static void find_direction_patch(uint8_t *fn) {
+    /* mov al,1; test r14b,0xf0; jne +0x13; <19 bytes: left stick x / y outside 0x41..0xbf -> al> */
+    static const uint8_t sig[] = {0xb0, 0x01, 0x41, 0xf6, 0xc6, 0xf0, 0x75, 0x13, 0x40, 0x80, 0xc7, 0x3f, 0x40, 0x80, 0xff,
+                                  0x7f, 0x72, 0x09, 0x80, 0xc3, 0x3f, 0x80, 0xfb, 0x7f, 0x0f, 0x92, 0xc0};
+    for (int i = 0; i < 0x80; i++) {
+        if (!memcmp(fn + i, sig, sizeof sig)) {
+            dir_patch_at = fn + i + 8;
+            memcpy(dir_patch_orig, dir_patch_at, sizeof dir_patch_orig);
+            return;
+        }
+    }
+    logf_("Menu pointer: direction_held not recognised, the pointer stays off while moving");
+}
+
+static void apply_direction_patch(bool on) {
+    if (!dir_patch_at || on == dir_patch_on) return;
+    uint8_t bytes[sizeof dir_patch_orig];
+    if (on) {
+        memset(bytes, 0x90, sizeof bytes);
+        bytes[0] = 0x31; bytes[1] = 0xc0; /* xor eax, eax: the stick never counts as a held direction */
+    } else {
+        memcpy(bytes, dir_patch_orig, sizeof bytes);
+    }
+    DWORD old;
+    if (!VirtualProtect(dir_patch_at, sizeof bytes, PAGE_EXECUTE_READWRITE, &old)) return;
+    memcpy(dir_patch_at, bytes, sizeof bytes);
+    VirtualProtect(dir_patch_at, sizeof bytes, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), dir_patch_at, sizeof bytes);
+    dir_patch_on = on;
+    logf_("Menu pointer while moving: %s", on ? "on (the left stick no longer blocks it)" : "off (as in the port)");
+}
+
 static void find_runtime(void) {
     uint8_t *base = (uint8_t *)GetModuleHandleW(NULL);
     if (!base) return;
-    uint32_t menu = 0, prompt = 0, pc_input = 0, touch = 0, in_menu_fn = 0;
+    uint32_t menu = 0, prompt = 0, pc_input = 0, touch = 0, in_menu_fn = 0, dir_held = 0;
     SymWant want[] = {
         {"_ZN9BbOverlay12_GLOBAL__N_19menu_openE", &menu},
         {"_ZN9BbOverlay12_GLOBAL__N_113prompt_activeE", &prompt},
@@ -1000,11 +1040,13 @@ static void find_runtime(void) {
         {"bbgpu_pc_input", &pc_input},
         {"touch_ids", &touch},
         {"_Z20menu_pointer_in_menuv", &in_menu_fn},
+        {"_ZN12_GLOBAL__N_114direction_heldEv", &dir_held},
     };
     scan_symbols(want, sizeof want / sizeof *want);
     runtime_has_pc_controls = pc_input != 0;
     runtime_has_touch_ids = touch != 0;
     if (in_menu_fn) rt_menu_pointer_in_menu = (bool (*)(void))(void *)(base + in_menu_fn);
+    if (dir_held) find_direction_patch(base + dir_held);
     if (menu) {
         menu_open_flag = base + menu;
         if (prompt) prompt_flag = base + prompt;
@@ -1167,6 +1209,7 @@ static BOOL CALLBACK init(PINIT_ONCE once, PVOID param, PVOID *ctx) {
         find_runtime();
         detect_pc_controls();
         hook_pad_read_state();
+        apply_direction_patch(cfg.menu_mouse_while_moving);
     }
     return TRUE;
 }
