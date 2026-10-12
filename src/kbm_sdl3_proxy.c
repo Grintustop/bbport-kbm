@@ -115,6 +115,7 @@ typedef struct {
     bool square_sticks; /* stick_shape = square: keyboard diagonals reach the corners, as in shadPS4 */
     float smooth_ms;    /* stick_smoothing_ms: time a key-driven stick needs to turn by 90 degrees */
     float jump_runup_ms; /* jump_runup_ms: sprint before a jump from walking (0 = only while sprinting) */
+    bool menu_stops_movement; /* game menus centre the key-driven sticks so the mouse pointer works */
     int key_toggle_capture, key_reload;
     bool uses_mouse, uses_wheel;
 } Config;
@@ -312,6 +313,10 @@ static void parse_line(Config *c, char *line, const char *file, int lineno) {
         c->square_sticks = !strcmp(in, "square");
         return;
     }
+    if (!strcmp(out, "menu_stops_movement")) { /* bbport extension */
+        c->menu_stops_movement = atoi(in) != 0;
+        return;
+    }
     if (!strcmp(out, "jump_runup_ms")) { /* bbport extension */
         float v = (float)atof(in);
         if (v >= 0 && v <= 2000) c->jump_runup_ms = v;
@@ -381,6 +386,7 @@ static void load_config(void) {
     c->deadzone_offset = 0.5f; c->speed = 1.0f; c->speed_offset = 0.125f; c->poll_ms = 33;
     c->smooth_ms = 70;
     c->jump_runup_ms = 0;
+    c->menu_stops_movement = true;
     c->key_toggle_capture = 64; c->key_reload = 65; /* F7, F8 */
     wchar_t dir[MAX_PATH], path[MAX_PATH];
     swprintf(dir, MAX_PATH, L"%ls\\input_config", root_dir);
@@ -568,6 +574,14 @@ static void update_snapshot(void) {
         case OUT_HALF_RIGHT: half_r = true; break;
         case OUT_JUMP: jump_held = true; break;
         }
+    }
+    /* menu_stops_movement: the game ignores the mouse pointer in its menus while the movement stick
+     * is tilted (the port's own PC controls stop the character in menus for that reason). While the
+     * runtime reports a game menu, key-driven sticks are centred; held keys count again when the
+     * menu closes. Off: the character keeps moving and the mouse works once the keys are released. */
+    if (cfg.menu_stops_movement && native_mouse_camera && rt_menu_pointer_in_menu && rt_menu_pointer_in_menu()) {
+        axes[AX_LX] = axes[AX_LY] = axes[AX_RX] = axes[AX_RY] = 0;
+        jump_held = false;
     }
     /* Jump: Bloodborne jumps on the release of a quick ○ tap while sprinting. The jump key plays
      * it: ○ off for 60 ms, on for 90 ms, off for 60 ms, then back to the ○ key's own state (a held
