@@ -118,7 +118,7 @@ the release). `jump = key` plays that for you, like the jump button of later Fro
 - while walking, with `jump_runup_ms` above 0 (about 600): ○ is held that long to start the sprint, then the same tap (with `0`, the default, nothing happens);
 - standing still: nothing (the game has no standing jump).
 
-With `jump_key_only = 1` (editor: "Jump only with the jump key") a second tap of ○ during a sprint
+With `jump_key_only = 1` (editor: "Jump key only") a second tap of ○ during a sprint
 or just after it rolls instead of jumping, so a roll out of a sprint needs no wait. Sprinting and
 rolling are not changed otherwise. How: the game decides between the jump and the roll in its player
 script (`action/script/c0000.hks`): a roll request while the sprint effect (special effect 390) is

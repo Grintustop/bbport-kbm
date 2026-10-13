@@ -193,7 +193,7 @@ class ControlsForm : Form
         AddRow(table, L.T("Разгон перед прыжком, мс", "Run-up before a jump, ms"), jumpRunup,
                L.T("0 — клавиша прыжка работает только на бегу (не нужно второй раз жать бег). Больше 0 — она сама разгоняется и прыгает из шага; удобно около 600 мс",
                    "0 = the jump key works only while sprinting (no second tap of sprint). Above 0 it also starts a sprint and jumps from walking; about 600 ms feels right"));
-        jumpOnly.Text = L.T("Прыжок только клавишей прыжка", "Jump only with the jump key");
+        jumpOnly.Text = L.T("Прыжок только клавишей", "Jump key only");
         AddRow(table, L.T("Бег + ○ (перекат)", "Sprint + ○ (roll)"), jumpOnly,
                L.T("в игре повторное нажатие ○ сразу после бега — прыжок, поэтому перекат из бега приходится ждать. Включено: ○ после бега всегда перекат, сразу; прыгает только клавиша прыжка. Действует после перезапуска игры",
                    "in the game a second tap of ○ right after a sprint jumps, so a roll out of a sprint has to wait. On: ○ after a sprint always rolls, at once; only the jump key jumps. Takes effect when the game restarts"));
