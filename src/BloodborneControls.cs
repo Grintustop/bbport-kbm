@@ -129,7 +129,7 @@ class ControlsForm : Form
     readonly Dictionary<string, TextBox[]> boxes = new Dictionary<string, TextBox[]>();
     readonly ComboBox mouseStick = new ComboBox(), stickShape = new ComboBox();
     readonly NumericUpDown smoothing = Num(0, 1000, 10, 0), jumpRunup = Num(0, 2000, 10, 0);
-    readonly CheckBox menuMouse = new CheckBox { AutoSize = true };
+    readonly CheckBox menuMouse = new CheckBox { AutoSize = true }, jumpOnly = new CheckBox { AutoSize = true };
     readonly NumericUpDown lingerMs = Num(0, 2000, 10, 0);
     readonly NumericUpDown deadzone = Num(0, 1, 0.01m, 2), speed = Num(0, 20, 0.1m, 2),
                            speedOffset = Num(0, 1, 0.01m, 3), pollMs = Num(1, 200, 1, 0);
@@ -193,6 +193,10 @@ class ControlsForm : Form
         AddRow(table, L.T("Разгон перед прыжком, мс", "Run-up before a jump, ms"), jumpRunup,
                L.T("0 — клавиша прыжка работает только на бегу (не нужно второй раз жать бег). Больше 0 — она сама разгоняется и прыгает из шага; удобно около 600 мс",
                    "0 = the jump key works only while sprinting (no second tap of sprint). Above 0 it also starts a sprint and jumps from walking; about 600 ms feels right"));
+        jumpOnly.Text = L.T("Прыжок только клавишей прыжка", "Jump only with the jump key");
+        AddRow(table, L.T("Бег + ○ (перекат)", "Sprint + ○ (roll)"), jumpOnly,
+               L.T("в игре повторное нажатие ○ сразу после бега — прыжок, поэтому перекат из бега приходится ждать. Включено: ○ после бега всегда перекат, сразу; прыгает только клавиша прыжка. Действует после перезапуска игры",
+                   "in the game a second tap of ○ right after a sprint jumps, so a roll out of a sprint has to wait. On: ○ after a sprint always rolls, at once; only the jump key jumps. Takes effect when the game restarts"));
 
         AddGroup(table, L.T("Мышь", "Mouse"));
         string mode = MouseModeText();
@@ -344,6 +348,7 @@ class ControlsForm : Form
         stickShape.SelectedIndex = 0;
         smoothing.Value = 70;
         jumpRunup.Value = 0;
+        jumpOnly.Checked = false;
         menuMouse.Checked = true;
         lingerMs.Value = 80;
         deadzone.Value = 0.5m; speed.Value = 1m; speedOffset.Value = 0.125m; pollMs.Value = 33;
@@ -368,6 +373,7 @@ class ControlsForm : Form
             if (o == "stick_shape") { stickShape.SelectedIndex = i == "square" ? 1 : 0; continue; }
             if (o == "menu_pointer_linger_ms") { decimal v; if (TryDec(i, out v)) lingerMs.Value = Clamp(lingerMs, v); continue; }
             if (o == "menu_mouse_while_moving") { menuMouse.Checked = i != "0"; continue; }
+            if (o == "jump_key_only") { jumpOnly.Checked = i != "0"; continue; }
             if (o == "jump_runup_ms") { decimal v; if (TryDec(i, out v)) jumpRunup.Value = Clamp(jumpRunup, v); continue; }
             if (o == "stick_smoothing_ms") { decimal v; if (TryDec(i, out v)) smoothing.Value = Clamp(smoothing, v); continue; }
             if (o == "mouse_poll_ms") { decimal v; if (TryDec(i, out v)) pollMs.Value = Clamp(pollMs, v); continue; }
@@ -470,6 +476,8 @@ class ControlsForm : Form
         sb.AppendLine();
         sb.AppendLine("# Jump key (bbport): sprint before a jump from walking, ms (0 = only while sprinting)");
         sb.AppendLine("jump_runup_ms = " + jumpRunup.Value);
+        sb.AppendLine("# bbport: 1 = circle after a sprint always rolls, only the jump key jumps (on game start)");
+        sb.AppendLine("jump_key_only = " + (jumpOnly.Checked ? "1" : "0"));
         sb.AppendLine();
         sb.AppendLine("# Mouse");
         sb.AppendLine("# bbport, v0.4: the menu mouse pointer also works while moving (1) or only when standing (0)");

@@ -23,6 +23,7 @@
  */
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <psapi.h>
 #include <ctype.h>
 #include <math.h>
 #include <stdarg.h>
@@ -115,6 +116,7 @@ typedef struct {
     bool square_sticks; /* stick_shape = square: keyboard diagonals reach the corners, as in shadPS4 */
     float smooth_ms;    /* stick_smoothing_ms: time a key-driven stick needs to turn by 90 degrees */
     float jump_runup_ms; /* jump_runup_ms: sprint before a jump from walking (0 = only while sprinting) */
+    bool jump_key_only;  /* jump_key_only: ○ after a sprint always rolls, only the jump key jumps */
     bool menu_mouse_while_moving; /* v0.4: the menu pointer also works while the left stick is tilted */
     int menu_pointer_linger_ms;   /* v0.4: how long a closed menu keeps the pointer (port: 400 ms) */
     int key_toggle_capture, key_reload;
@@ -158,6 +160,10 @@ static float mouse_ax, mouse_ay;
 static float key_stick[2][2]; /* key-driven stick vectors after smoothing */
 static bool jump_was_held;
 static int jump_mode; /* 0 idle, 1 re-tap of a held sprint, 2 run-up then re-tap */
+static double jump_flag_until; /* jump_key_only: when the jump check goes back to "never" */
+static bool jump_flag_set;
+static volatile bool jump_flag_script;
+static void set_jump_flag(bool on);
 static double jump_start;
 static double smooth_time = -1e9;
 static bool real_pad_present;
@@ -265,7 +271,9 @@ static const char default_config[] =
     "stick_shape = circle\nstick_smoothing_ms = 70\n\n"
     "# jump = key: a dedicated jump key while sprinting. jump_runup_ms > 0 (about 600) also makes it\n"
     "# start a sprint and jump from walking; 0 = only while sprinting\n"
-    "jump_runup_ms = 0\n\n"
+    "jump_runup_ms = 0\n"
+    "# jump_key_only = 1: ○ after a sprint always rolls, only the jump key jumps (on game start)\n"
+    "jump_key_only = 0\n\n"
     "mouse_to_joystick = right\n"
     "# deadzone offset, speed, speed offset\n"
     "mouse_movement_params = 0.5, 1.0, 0.125\n";
@@ -323,6 +331,10 @@ static void parse_line(Config *c, char *line, const char *file, int lineno) {
     }
     if (!strcmp(out, "menu_mouse_while_moving")) { /* bbport extension */
         c->menu_mouse_while_moving = atoi(in) != 0;
+        return;
+    }
+    if (!strcmp(out, "jump_key_only")) { /* bbport extension, read when the game starts */
+        c->jump_key_only = atoi(in) != 0;
         return;
     }
     if (!strcmp(out, "jump_runup_ms")) { /* bbport extension */
@@ -599,6 +611,8 @@ static void update_snapshot(void) {
         float lx = axes[AX_LX], ly = axes[AX_LY];
         if (s.button[BTN_EAST]) { jump_mode = 1; jump_start = t; }
         else if (lx * lx + ly * ly > 60.0f * 60.0f && cfg.jump_runup_ms > 0) { jump_mode = 2; jump_start = t; }
+        /* jump_key_only: the patched player script jumps on this tap only */
+        if (jump_mode && jump_flag_script) { set_jump_flag(true); jump_flag_set = true; }
     }
     jump_was_held = jump_held;
     if (jump_mode) {
@@ -607,8 +621,9 @@ static void update_snapshot(void) {
         else if (e < 60) s.button[BTN_EAST] = false;
         else if (e < 150) s.button[BTN_EAST] = true;
         else if (e < 210) s.button[BTN_EAST] = false;
-        else jump_mode = 0;
+        else { jump_mode = 0; jump_flag_until = t + 500; } /* the game acts on the tap a few hundred ms later */
     }
+    if (jump_flag_set && !jump_mode && t > jump_flag_until) { set_jump_flag(false); jump_flag_set = false; }
 
     float mouse_x = mouse_ax, mouse_y = mouse_ay;
     int mouse_stick = cfg.mouse_stick;
@@ -1077,6 +1092,382 @@ static void apply_linger_patch(int ms) {
     logf_("Menu pointer: hidden %d ms after a menu closes (port: 400)", ms);
 }
 
+/* jump_key_only. Bloodborne's player script (action/script/c0000.hks, HavokScript bytecode)
+ * decides in Act_AttackRight: a roll request (Arm_Rolling, the release of a quick ○ tap) while
+ * special effect 390 is on (a sprint and a moment after it) fires W_Jump, otherwise a roll. When
+ * the runtime opens that file it gets a copy in which the jump checks for a special effect id held
+ * in a new constant instead of 390. The constant names no effect (JUMP_FLAG_OFF), so ○ after a
+ * sprint always rolls, at once. While the jump key plays its ○ tap the constant is set to 390 in
+ * the loaded script (found in the game's memory next to the second new constant, JUMP_FLAG_MARK),
+ * so that one tap jumps. The game's files are not changed: the copy is out\kbm-c0000-jump.hks,
+ * made from whatever file the game opens (a mod's player script works the same way). */
+#define JUMP_FLAG_OFF -73191.0f
+#define JUMP_FLAG_MARK -73192.0f
+#define JUMP_FLAG_ON 390.0f
+
+typedef struct { const uint8_t *d; size_t n, o; bool bad; } HksReader;
+
+static uint32_t hks_u32(HksReader *r) {
+    if (r->o + 4 > r->n) { r->bad = true; return 0; }
+    const uint8_t *p = r->d + r->o;
+    r->o += 4;
+    return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];
+}
+
+static uint8_t hks_u8(HksReader *r) {
+    if (r->o + 1 > r->n) { r->bad = true; return 0; }
+    return r->d[r->o++];
+}
+
+/* A string constant: 8-byte big-endian length including the terminator, then the bytes. */
+static const char *hks_str(HksReader *r, size_t *len) {
+    uint32_t hi = hks_u32(r), lo = hks_u32(r);
+    if (hi || lo > r->n - r->o) { r->bad = true; return NULL; }
+    const char *s = (const char *)r->d + r->o;
+    r->o += lo;
+    *len = lo;
+    return lo ? s : NULL;
+}
+
+typedef struct { size_t code, nk_at, k_end; uint32_t nk, loadk; bool found; } HksSite;
+
+#define HKS_OP(i) ((i) >> 25)
+#define HKS_A(i) ((i) & 0xff)
+#define HKS_BX(i) (((i) >> 8) & 0x1ffff)
+#define HKS_GETGLOBAL_MEM 91
+#define HKS_LOADK 25
+
+static uint32_t hks_word(const uint8_t *d, size_t at) {
+    return (uint32_t)d[at] << 24 | (uint32_t)d[at + 1] << 16 | (uint32_t)d[at + 2] << 8 | d[at + 3];
+}
+
+static void hks_function(HksReader *r, HksSite *site, int depth) {
+    if (depth > 8) { r->bad = true; return; }
+    hks_u32(r); hks_u32(r); hks_u8(r); hks_u32(r); hks_u32(r); /* upvalues, params, vararg, stack, ? */
+    uint32_t ninstr = hks_u32(r);
+    r->o = (r->o + 3) & ~(size_t)3;
+    size_t code = r->o;
+    if (r->bad || r->o > r->n || ninstr > (r->n - r->o) / 4) { r->bad = true; return; }
+    r->o += (size_t)ninstr * 4;
+    size_t nk_at = r->o;
+    uint32_t nk = hks_u32(r);
+    int k_rolling = -1, k_390 = -1, k_jump = -1;
+    for (uint32_t i = 0; i < nk && !r->bad; i++) {
+        size_t len;
+        const char *s;
+        switch (hks_u8(r)) {
+        case 0: break;
+        case 1: hks_u8(r); break;
+        case 3: if (hks_u32(r) == 0x43c30000) k_390 = (int)i; break; /* 390.0f */
+        case 4:
+            s = hks_str(r, &len);
+            if (s && len == 12 && !memcmp(s, "Arm_Rolling", 12)) k_rolling = (int)i;
+            if (s && len == 7 && !memcmp(s, "W_Jump", 7)) k_jump = (int)i;
+            break;
+        default: r->bad = true;
+        }
+    }
+    size_t k_end = r->o;
+    if (hks_u32(r)) { /* debug info */
+        uint32_t nlines = hks_u32(r), nlocals = hks_u32(r), nups = hks_u32(r);
+        size_t len;
+        hks_u32(r); hks_u32(r);
+        hks_str(r, &len); hks_str(r, &len);
+        r->o += (size_t)nlines * 4;
+        for (uint32_t i = 0; i < nlocals && !r->bad; i++) { hks_str(r, &len); hks_u32(r); hks_u32(r); }
+        for (uint32_t i = 0; i < nups && !r->bad; i++) hks_str(r, &len);
+    }
+    /* the jump check: GETGLOBAL_MEM r2 'Arm_Rolling', LOADK r2 390 soon after, then LOADK 'W_Jump' */
+    if (!r->bad && !site->found && k_rolling >= 0 && k_390 >= 0 && k_jump >= 0) {
+        for (uint32_t pc = 0; pc + 25 < ninstr && !site->found; pc++) {
+            uint32_t w = hks_word(r->d, code + pc * 4);
+            if (HKS_OP(w) != HKS_GETGLOBAL_MEM || HKS_A(w) != 2 || (int)HKS_BX(w) != k_rolling) continue;
+            uint32_t loadk = 0;
+            for (uint32_t q = pc; q < pc + 25; q++) {
+                uint32_t x = hks_word(r->d, code + q * 4);
+                if (HKS_OP(x) != HKS_LOADK) continue;
+                if ((int)HKS_BX(x) == k_390 && q < pc + 12) loadk = q;
+                if ((int)HKS_BX(x) == k_jump && loadk) {
+                    *site = (HksSite){code, nk_at, k_end, nk, loadk, true};
+                    break;
+                }
+            }
+        }
+    }
+    uint32_t nchildren = hks_u32(r);
+    for (uint32_t i = 0; i < nchildren && !r->bad; i++) hks_function(r, site, depth + 1);
+}
+
+static void put_be32(uint8_t *p, uint32_t v) { p[0] = v >> 24; p[1] = v >> 16; p[2] = v >> 8; p[3] = v; }
+
+/* The patched script, or NULL. Four constants are added: JUMP_FLAG_OFF (the jump check now loads
+ * it in place of 390), JUMP_FLAG_MARK and two nils, 12 bytes, so the 4-byte alignment of every
+ * later function's code stays as it is. */
+static uint8_t *hks_patch(const uint8_t *d, size_t n, size_t *out_n) {
+    static const uint8_t magic[] = {0x1b, 'L', 'u', 'a', 0x51, 0x0e};
+    if (n < 0x100 || memcmp(d, magic, sizeof magic)) return NULL;
+    HksReader r = {d, n, 14, false}; /* after the 14-byte header: the type table */
+    uint32_t ntypes = hks_u32(&r);
+    for (uint32_t i = 0; i < ntypes && !r.bad; i++) { hks_u32(&r); r.o += hks_u32(&r); }
+    HksSite site = {0};
+    hks_function(&r, &site, 0);
+    if (r.bad || !site.found) return NULL;
+    uint8_t add[12] = {3, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0};
+    float off = JUMP_FLAG_OFF, mark = JUMP_FLAG_MARK;
+    uint32_t u;
+    memcpy(&u, &off, 4); put_be32(add + 1, u);
+    memcpy(&u, &mark, 4); put_be32(add + 6, u);
+    uint8_t *o = malloc(n + sizeof add);
+    if (!o) return NULL;
+    memcpy(o, d, site.k_end);
+    memcpy(o + site.k_end, add, sizeof add);
+    memcpy(o + site.k_end + sizeof add, d + site.k_end, n - site.k_end);
+    put_be32(o + site.nk_at, site.nk + 4);
+    size_t at = site.code + (size_t)site.loadk * 4;
+    put_be32(o + at, (hks_word(o, at) & ~(0x1ffffu << 8)) | site.nk << 8);
+    *out_n = n + sizeof add;
+    return o;
+}
+
+/* ---- the loaded script's jump constant ---- */
+
+typedef int(__cdecl *OpenFn)(const char *, int, int);
+typedef int(__cdecl *Stat64Fn)(const char *, void *);
+static OpenFn real_open;
+static Stat64Fn real_stat64;
+static SRWLOCK hks_lock = SRWLOCK_INIT;
+static char hks_patched_path[MAX_PATH * 3];
+static bool hks_tried;
+static HANDLE scan_event;
+static volatile bool scan_wanted; /* a jump found no loaded copy */
+
+/* Every loaded copy of the jump constant (the player's and other c0000 characters'), by the
+ * address of its value. A HavokScript constant is 16 bytes: type (3 = number) at +0, value at +8;
+ * the marker constant follows. */
+#define MAX_JUMP_SLOTS 16
+static float *jump_slots[MAX_JUMP_SLOTS];
+static volatile int jump_nslots;
+static volatile bool jump_flag_on;
+
+static bool jump_slot_valid(const float *v) {
+    const uint32_t *w = (const uint32_t *)v;
+    return w[-2] == 3 && w[2] == 3 && v[4] == JUMP_FLAG_MARK && (*v == JUMP_FLAG_OFF || *v == JUMP_FLAG_ON);
+}
+
+typedef BOOL(WINAPI *QueryWorkingSetExFn)(HANDLE, PVOID, DWORD);
+static QueryWorkingSetExFn query_ws;
+
+typedef struct { float *found[MAX_JUMP_SLOTS]; int n; uint8_t *where; } JumpScan;
+
+/* Looks through the resident pages of [lo, hi): pages the game has not touched are skipped, so
+ * reading does not grow its memory. */
+static void scan_pages(uint8_t *lo, uint8_t *hi, JumpScan *js, uint8_t *alloc) {
+    enum { PAGES = 256 };
+    static PSAPI_WORKING_SET_EX_INFORMATION ws[PAGES];
+    static uint8_t buf[PAGES * 4096];
+    float off = JUMP_FLAG_OFF, mark = JUMP_FLAG_MARK;
+    uint32_t uoff, umark;
+    memcpy(&uoff, &off, 4);
+    memcpy(&umark, &mark, 4);
+    for (uint8_t *p = lo; p < hi && js->n < MAX_JUMP_SLOTS; p += PAGES * 4096) {
+        int np = (size_t)(hi - p) / 4096 < PAGES ? (int)((size_t)(hi - p) / 4096) : PAGES;
+        for (int i = 0; i < np; i++) ws[i].VirtualAddress = p + (size_t)i * 4096;
+        if (!query_ws || !query_ws(GetCurrentProcess(), ws, sizeof ws[0] * np)) continue;
+        for (int i = 0; i < np; i++) {
+            if (!ws[i].VirtualAttributes.Valid) continue;
+            int j = i;
+            while (j < np && ws[j].VirtualAttributes.Valid) j++;
+            SIZE_T got = 0;
+            uint8_t *from = p + (size_t)i * 4096;
+            ReadProcessMemory(GetCurrentProcess(), from, buf, (size_t)(j - i) * 4096, &got);
+            /* a constant whose marker lies on the next, non-resident page is missed; the next
+             * scan, after the game touches it, finds it */
+            for (size_t k = 8; k + 24 <= got && js->n < MAX_JUMP_SLOTS; k += 8) {
+                uint32_t v, t, t2, m;
+                memcpy(&v, buf + k, 4);
+                if (v != uoff) continue;
+                memcpy(&t, buf + k - 8, 4); memcpy(&t2, buf + k + 8, 4); memcpy(&m, buf + k + 16, 4);
+                if (t == 3 && t2 == 3 && m == umark) { js->found[js->n++] = (float *)(from + k); js->where = alloc; }
+            }
+            i = j;
+        }
+    }
+}
+
+/* The committed, readable, mapped regions of one allocation (base != NULL), or of the game's
+ * memory (base == NULL: mapped allocations at 64 GiB .. 1 TiB, the runtime's first view of the
+ * PS4 memory). */
+static void scan_memory(uint8_t *base, JumpScan *js) {
+    uint8_t *p = base ? base : (uint8_t *)0x1000000000ull;
+    uint8_t *end = base ? (uint8_t *)UINTPTR_MAX : (uint8_t *)0x10000000000ull;
+    MEMORY_BASIC_INFORMATION mi;
+    while (p < end && js->n < MAX_JUMP_SLOTS && VirtualQuery(p, &mi, sizeof mi)) {
+        if (base && mi.AllocationBase != base) break;
+        if (mi.State == MEM_COMMIT && mi.Type == MEM_MAPPED && !(mi.Protect & (PAGE_GUARD | PAGE_NOACCESS)))
+            scan_pages(mi.BaseAddress, (uint8_t *)mi.BaseAddress + mi.RegionSize, js, mi.AllocationBase);
+        p = (uint8_t *)mi.BaseAddress + mi.RegionSize;
+    }
+}
+
+/* Background thread. The loaded copies move when the game loads an area, so they are checked
+ * every few seconds and searched for again: first in the allocation where they were last found
+ * (remembered in out\kbm-jump-scan.txt: the game's memory layout repeats from run to run), then,
+ * after a jump that found none or every 30 s while none is known, in all of the game's memory. */
+static DWORD WINAPI jump_scan_thread(LPVOID unused) {
+    (void)unused;
+    wchar_t hint_path[MAX_PATH];
+    swprintf(hint_path, MAX_PATH, L"%ls\\out\\kbm-jump-scan.txt", root_dir);
+    uint8_t *hint = NULL;
+    FILE *f = _wfopen(hint_path, L"r");
+    if (f) {
+        unsigned long long v;
+        if (fscanf(f, "%llx", &v) == 1) hint = (uint8_t *)(uintptr_t)v;
+        fclose(f);
+    }
+    query_ws = (QueryWorkingSetExFn)(void *)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "K32QueryWorkingSetEx");
+    double last_full = now_ms();
+    int last_n = -1;
+    for (;;) {
+        WaitForSingleObject(scan_event, 4000);
+        bool known = false;
+        AcquireSRWLockShared(&hks_lock);
+        for (int i = 0; i < jump_nslots && !known; i++) known = jump_slot_valid(jump_slots[i]);
+        ReleaseSRWLockShared(&hks_lock);
+        if (known) continue;
+        JumpScan js = {0};
+        if (hint) scan_memory(hint, &js);
+        bool full = !js.n && (scan_wanted || now_ms() - last_full > 30000);
+        if (full) {
+            double t0 = now_ms();
+            scan_memory(NULL, &js);
+            last_full = now_ms();
+            logf_("Jump key only: searched the game's memory in %.0f ms", last_full - t0);
+            if (js.n && js.where != hint) {
+                hint = js.where;
+                FILE *w = _wfopen(hint_path, L"w");
+                if (w) { fprintf(w, "%llx\n", (unsigned long long)(uintptr_t)hint); fclose(w); }
+            }
+        }
+        scan_wanted = false;
+        AcquireSRWLockExclusive(&hks_lock);
+        memcpy(jump_slots, js.found, sizeof(float *) * js.n);
+        jump_nslots = js.n;
+        ReleaseSRWLockExclusive(&hks_lock);
+        if (js.n != last_n || full) logf_("Jump key only: %d loaded copies of the jump check", js.n);
+        last_n = js.n;
+    }
+    return 0;
+}
+
+static void set_jump_flag(bool on) {
+    if (on == jump_flag_on) return;
+    jump_flag_on = on;
+    int done = 0;
+    AcquireSRWLockShared(&hks_lock);
+    for (int i = 0; i < jump_nslots; i++)
+        if (jump_slot_valid(jump_slots[i])) { *(volatile float *)jump_slots[i] = on ? JUMP_FLAG_ON : JUMP_FLAG_OFF; done++; }
+    ReleaseSRWLockShared(&hks_lock);
+    if (on && !done && scan_event) { scan_wanted = true; SetEvent(scan_event); } /* look for it now */
+}
+
+static bool is_player_script(const char *path) {
+    static const char tail[] = "action/script/c0000.hks";
+    size_t n = strlen(path), m = sizeof tail - 1;
+    if (n < m) return false;
+    for (size_t i = 0; i < m; i++) {
+        char a = (char)tolower((unsigned char)path[n - m + i]);
+        if ((a == '\\' ? '/' : a) != tail[i]) return false;
+    }
+    return true;
+}
+
+/* The patched copy of `path` (made once per game start), or NULL to open the original. */
+static const char *player_script_redirect(const char *path) {
+    if (!is_player_script(path)) return NULL;
+    ENSURE();
+    if (!enabled || !cfg.jump_key_only) return NULL;
+    AcquireSRWLockExclusive(&hks_lock);
+    if (!hks_tried) {
+        hks_tried = true;
+        uint8_t *d = NULL, *o = NULL;
+        size_t n = 0, on = 0;
+        FILE *f = fopen(path, "rb");
+        if (f) {
+            fseek(f, 0, SEEK_END);
+            long len = ftell(f);
+            fseek(f, 0, SEEK_SET);
+            if (len > 0 && len < (64 << 20) && (d = malloc((size_t)len)) && fread(d, 1, (size_t)len, f) == (size_t)len)
+                n = (size_t)len;
+            fclose(f);
+        }
+        if (n) o = hks_patch(d, n, &on);
+        if (o) {
+            char out[MAX_PATH * 3];
+            snprintf(out, sizeof out, "%ls\\out\\kbm-c0000-jump.hks", root_dir);
+            FILE *w = fopen(out, "wb");
+            bool ok = w && fwrite(o, 1, on, w) == on;
+            if (w && fclose(w)) ok = false;
+            if (ok) {
+                strcpy(hks_patched_path, out);
+                jump_flag_script = true;
+                scan_event = CreateEventW(NULL, FALSE, FALSE, NULL);
+                CloseHandle(CreateThread(NULL, 0, jump_scan_thread, NULL, 0, NULL));
+                logf_("Jump key only: circle after a sprint rolls, the jump key jumps (player script patched)");
+            } else {
+                logf_("Jump key only: could not write %s", out);
+            }
+        } else {
+            logf_("Jump key only: the player script was not recognised (%s), circle jumps as in the game", path);
+        }
+        free(d);
+        free(o);
+    }
+    ReleaseSRWLockExclusive(&hks_lock);
+    return hks_patched_path[0] ? hks_patched_path : NULL;
+}
+
+static int __cdecl open_hook(const char *path, int flags, int mode) {
+    const char *to = path && (flags & 3) == 0 /* _O_RDONLY */ ? player_script_redirect(path) : NULL;
+    return real_open(to ? to : path, flags, mode);
+}
+
+static int __cdecl stat64_hook(const char *path, void *st) {
+    const char *to = path ? player_script_redirect(path) : NULL;
+    return real_stat64(to ? to : path, st);
+}
+
+/* Replaces bb-probe.exe's import of `name`: *orig gets the original function first. */
+static bool hook_import(const char *name, void *hook, void **orig) {
+    uint8_t *base = (uint8_t *)GetModuleHandleW(NULL);
+    IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)(base + ((IMAGE_DOS_HEADER *)base)->e_lfanew);
+    IMAGE_DATA_DIRECTORY dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    if (!dir.VirtualAddress) return false;
+    for (IMAGE_IMPORT_DESCRIPTOR *imp = (IMAGE_IMPORT_DESCRIPTOR *)(base + dir.VirtualAddress); imp->Name; imp++) {
+        if (!imp->OriginalFirstThunk) continue;
+        IMAGE_THUNK_DATA *names = (IMAGE_THUNK_DATA *)(base + imp->OriginalFirstThunk);
+        IMAGE_THUNK_DATA *slots = (IMAGE_THUNK_DATA *)(base + imp->FirstThunk);
+        for (; names->u1.AddressOfData; names++, slots++) {
+            if (IMAGE_SNAP_BY_ORDINAL(names->u1.Ordinal)) continue;
+            IMAGE_IMPORT_BY_NAME *by = (IMAGE_IMPORT_BY_NAME *)(base + names->u1.AddressOfData);
+            if (strcmp((const char *)by->Name, name)) continue;
+            DWORD old;
+            if (!VirtualProtect(&slots->u1.Function, sizeof(void *), PAGE_READWRITE, &old)) return false;
+            *orig = (void *)slots->u1.Function;
+            slots->u1.Function = (ULONG_PTR)hook;
+            VirtualProtect(&slots->u1.Function, sizeof(void *), old, &old);
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Installed while the runtime loads (DllMain): the game may read its scripts before the first SDL
+ * call this layer sees. The hooks change only c0000.hks and only with jump_key_only = 1. */
+static void hook_file_opens(void) {
+    hook_import("_open", (void *)open_hook, (void **)&real_open);
+    hook_import("_stat64", (void *)stat64_hook, (void **)&real_stat64);
+}
+
 static void find_runtime(void) {
     uint8_t *base = (uint8_t *)GetModuleHandleW(NULL);
     if (!base) return;
@@ -1269,6 +1660,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved) {
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(inst);
         self_module = inst;
+        hook_file_opens();
     }
     return TRUE;
 }

@@ -92,6 +92,7 @@ Extra options of this add-on (ignored by shadPS4):
 | `menu_pointer_linger_ms` | `80` | v0.4: how long the mouse pointer stays after a game menu closes. The port keeps it 400 ms after the last menu list update; the layer shortens that (an in-memory patch of the constant). |
 | `jump = key` | — | A dedicated jump key (see below). |
 | `jump_runup_ms` | `0` | `0`: the jump key works while sprinting. Above `0` it also starts a sprint and jumps from walking (about `600` feels right). |
+| `jump_key_only` | `0` | `1`: ○ after a sprint always rolls, at once; only the jump key jumps (v0.4, read when the game starts). |
 
 `mouse_to_joystick` and `mouse_movement_params` drive the camera only when the port's native mouse
 camera is off. With it, sensitivity and inversion are set in the port's launcher, and the speed of
@@ -116,6 +117,16 @@ the release). `jump = key` plays that for you, like the jump button of later Fro
   sprinting after landing;
 - while walking, with `jump_runup_ms` above 0 (about 600): ○ is held that long to start the sprint, then the same tap (with `0`, the default, nothing happens);
 - standing still: nothing (the game has no standing jump).
+
+With `jump_key_only = 1` (editor: "Jump only with the jump key") a second tap of ○ during a sprint
+or just after it rolls instead of jumping, so a roll out of a sprint needs no wait. Sprinting and
+rolling are not changed otherwise. How: the game decides between the jump and the roll in its player
+script (`action/script/c0000.hks`): a roll request while the sprint effect (special effect 390) is
+on becomes a jump. When the runtime opens that file this layer hands it a copy
+(`out\kbm-c0000-jump.hks`) whose check asks for an effect that never exists, and while the jump key
+plays its tap it puts 390 back into the loaded script for about 0.7 s. The game's files are not
+changed. The loaded script is found in the game's memory in the background (about 1 s the first
+time, then from the address remembered in `out\kbm-jump-scan.txt`).
 
 ### Touchpad: gestures and Personal Effects
 

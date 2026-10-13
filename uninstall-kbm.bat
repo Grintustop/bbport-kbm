@@ -15,6 +15,7 @@ move /y "out\SDL3_real.dll" "out\SDL3.dll" >nul || (
     pause
     exit /b 1
 )
+del /q "out\kbm-c0000-jump.hks" "out\kbm-jump-scan.txt" 2>nul
 echo Uninstalled: the original SDL3.dll is restored. Your bindings stay in input_config\.
 echo Удалено: оригинальная SDL3.dll восстановлена. Настройки остались в input_config\.
 pause
