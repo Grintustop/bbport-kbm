@@ -213,9 +213,14 @@ class ControlsForm : Form
                    "how long the pointer stays after a menu closes (the port uses 400). Raise it if the pointer flickers between menu pages (v0.4)"));
         AddRow(table, L.T("Движение мыши управляет", "Mouse movement controls"), mouseStick, null);
         AddRow(table, L.T("Мёртвая зона (deadzone offset, 0–1)", "Deadzone offset (0–1)"), deadzone, L.T("минимальный наклон стика при движении мыши", "minimum stick tilt while the mouse moves"));
-        AddRow(table, L.T("Скорость (speed)", "Speed"), speed, L.T("чувствительность камеры", "camera sensitivity"));
+        AddRow(table, L.T("Скорость (speed)", "Speed"), speed, nativeCamera
+            ? L.T("множитель к чувствительности из лаунчера порта: 1 — как в лаунчере, 0.5 — вдвое медленнее, 2 — вдвое быстрее",
+                  "multiplies the sensitivity from the port's launcher: 1 = as in the launcher, 0.5 = half, 2 = double")
+            : L.T("чувствительность камеры", "camera sensitivity"));
         AddRow(table, L.T("Смещение скорости (speed offset, 0–1)", "Speed offset (0–1)"), speedOffset, L.T("добавка к наклону при любом движении", "added to the tilt on any movement"));
         AddRow(table, L.T("Период опроса мыши, мс", "Mouse polling period, ms"), pollMs, L.T("33 — как в shadPS4", "33 = same as shadPS4"));
+        // the port's own camera: only the speed applies (as a multiplier)
+        mouseStick.Enabled = deadzone.Enabled = speedOffset.Enabled = pollMs.Enabled = !nativeCamera;
 
         AddGroup(table, L.T("Горячие клавиши в игре", "In-game hotkeys"));
         Hook(hotCapture, L.T("Захват мыши вкл/выкл", "Toggle mouse capture"));
@@ -400,6 +405,8 @@ class ControlsForm : Form
 
     // Ports from 0.4 have their own PC controls (bbport.ini pc_controls / mouse_camera, set in the
     // port's launcher). The kbm layer then keeps the native mouse camera; describe what applies.
+    bool nativeCamera;
+
     string MouseModeText()
     {
         string ini = Path.Combine(root, "bbport.ini");
@@ -413,13 +420,14 @@ class ControlsForm : Form
         if (!values.ContainsKey("pc_controls")) return null; // v0.1: no PC controls in the runtime
         bool pc = values["pc_controls"] != "0";
         bool cam = pc && (!values.ContainsKey("mouse_camera") || values["mouse_camera"] != "0");
+        nativeCamera = cam;
         if (cam)
             return L.T("PC-управление порта включено (лаунчер → Controls): камера мышью и курсор в меню — родные, " +
-                       "чувствительность задаётся в лаунчере порта, параметры ниже не используются. Клавиши и кнопки " +
-                       "мыши берутся из этой программы, привязки лаунчера порта в игре не действуют.",
+                       "чувствительность задаётся в лаунчере порта, «Скорость» ниже умножает её, остальные параметры мыши " +
+                       "не используются. Клавиши и кнопки мыши берутся из этой программы, привязки лаунчера порта в игре не действуют.",
                        "The port's PC controls are on (launcher → Controls): the mouse camera and the menu pointer are " +
-                       "native, sensitivity is set in the port's launcher and the settings below are not used. Keys and " +
-                       "mouse buttons come from this program; the port launcher's bindings do not apply in the game.");
+                       "native, sensitivity is set in the port's launcher, the Speed below multiplies it and the other mouse " +
+                       "settings are not used. Keys and mouse buttons come from this program; the port launcher's bindings do not apply in the game.");
         if (pc)
             return L.T("PC-управление порта включено без камеры мышью: камера — по параметрам ниже, клавиши и кнопки мыши — из этой программы.",
                        "The port's PC controls are on without the mouse camera: the camera uses the settings below, keys and mouse buttons come from this program.");

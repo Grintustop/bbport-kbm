@@ -93,8 +93,9 @@ Extra options of this add-on (ignored by shadPS4):
 | `jump = key` | — | A dedicated jump key (see below). |
 | `jump_runup_ms` | `0` | `0`: the jump key works while sprinting. Above `0` it also starts a sprint and jumps from walking (about `600` feels right). |
 
-`mouse_to_joystick` and `mouse_movement_params` apply only when the port's native mouse camera is
-off; with it, sensitivity and inversion are set in the port's launcher.
+`mouse_to_joystick` and `mouse_movement_params` drive the camera only when the port's native mouse
+camera is off. With it, sensitivity and inversion are set in the port's launcher, and the speed of
+`mouse_movement_params` multiplies that sensitivity (1 = as in the launcher, 0.5 = half, 2 = double).
 Hotkeys in `global.ini`: `hotkey_toggle_mouse_to_joystick` (F7), `hotkey_reload_inputs` (F8).
 Keys are matched by position (scancodes), so the keyboard layout (e.g. Russian) does not matter.
 

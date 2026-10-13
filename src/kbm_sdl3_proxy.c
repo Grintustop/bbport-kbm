@@ -451,7 +451,8 @@ static void detect_pc_controls(void) {
               "(mouse_to_joystick camera)");
     else if (native_mouse_camera)
         logf_("Runtime PC controls with mouse camera: keys and mouse buttons come from input_config, "
-              "the camera and the menu pointer stay native (mouse_to_joystick is ignored)");
+              "the camera and the menu pointer stay native (mouse_to_joystick is ignored; its speed scales "
+              "the launcher's sensitivity)");
     else
         logf_("Runtime PC controls without mouse camera: keys and mouse buttons come from input_config, "
               "the mouse camera from mouse_to_joystick");
@@ -910,6 +911,17 @@ static void debug_state(void) {
     }
 }
 
+/* The runtime's native mouse camera adds the relative motion of these events (xrel/yrel, floats)
+ * to its turn counts, at the launcher's mouse_sensitivity; the speed of mouse_movement_params
+ * scales it on top (1 = as in the launcher). The menu pointer uses the absolute position. */
+static void scale_native_motion(SDL_Event *e) {
+    if (!native_mouse_camera || e->type != EV_MOUSE_MOTION || cfg.speed == 1.0f) return;
+    float k = cfg.speed < 0.1f ? 0.1f : cfg.speed;
+    uint8_t *p = (uint8_t *)e;
+    *(float *)(p + 36) *= k;
+    *(float *)(p + 40) *= k;
+}
+
 EXPORT bool SDL_PollEvent(SDL_Event *e) {
     ENSURE();
     for (;;) {
@@ -917,6 +929,7 @@ EXPORT bool SDL_PollEvent(SDL_Event *e) {
         if (enabled) {
             if (r && e) {
                 handle_event(e);
+                scale_native_motion(e);
                 bool hidden = hide_from_runtime(e);
                 if (debug_log) debug_event(e, hidden);
                 if (hidden) continue;
