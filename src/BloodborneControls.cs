@@ -17,29 +17,55 @@ static class Program
         D.Init();
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
+        D.ForPoint(Cursor.Position);
         ControlsForm form;
-        do { form = new ControlsForm(); Application.Run(form); } while (form.SwitchLanguage);
+        ControlsForm.State state = null;
+        do { form = new ControlsForm(state); Application.Run(form); state = form.Carry; } while (form.SwitchLanguage || state != null);
     }
 }
 
 // Interface language: Russian on Russian Windows, English otherwise. The button in the window
 // switches it and remembers the choice in input_config\editor-language.txt.
-// High DPI: the process tells Windows it scales itself (otherwise Windows stretches the window as
-// a bitmap and the text looks blurry on 125-150 % displays); pixel sizes go through D.S.
+// High DPI: the process tells Windows it scales itself per monitor (otherwise Windows stretches the
+// window as a bitmap and the text looks blurry: on 125-150 % displays, and on a 100 % monitor next
+// to a 125 % main one). Pixel sizes and fonts go through D.S / D.F for the DPI of the window's
+// monitor; when the window moves to a monitor with another DPI it is built again (ControlsForm).
 static class D
 {
     [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool SetProcessDpiAwarenessContext(IntPtr value);
     [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool SetProcessDPIAware();
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern IntPtr MonitorFromPoint(Point pt, uint flags);
+    [System.Runtime.InteropServices.DllImport("shcore.dll")] static extern int GetDpiForMonitor(IntPtr monitor, int type, out uint x, out uint y);
     public static float K = 1f;
 
     public static void Init()
     {
-        try { if (!SetProcessDpiAwarenessContext(new IntPtr(-2))) SetProcessDPIAware(); } // -2: system aware
+        try
+        {
+            // -4: per monitor v2 (Windows 10 1703+), -3: per monitor; older Windows: the system DPI
+            if (!SetProcessDpiAwarenessContext(new IntPtr(-4)) && !SetProcessDpiAwarenessContext(new IntPtr(-3))) SetProcessDPIAware();
+        }
         catch (EntryPointNotFoundException) { try { SetProcessDPIAware(); } catch { } }
         using (var g = Graphics.FromHwnd(IntPtr.Zero)) K = g.DpiX / 96f;
     }
 
+    // The DPI of the monitor at a point (where the window opens).
+    public static void ForPoint(Point p)
+    {
+        try
+        {
+            uint x, y;
+            if (GetDpiForMonitor(MonitorFromPoint(p, 2 /* nearest */), 0 /* effective */, out x, out y) == 0 && x > 0) K = x / 96f;
+        }
+        catch (DllNotFoundException) { }
+        catch (EntryPointNotFoundException) { }
+    }
+
     public static int S(int px) { return (int)Math.Round(px * K); }
+    public static Font F(float points, FontStyle style = FontStyle.Regular)
+    {
+        return new Font("Segoe UI", points * 96f / 72f * K, style, GraphicsUnit.Pixel);
+    }
     public static Size Sz(int w, int h) { return new Size(S(w), S(h)); }
     public static Padding Pad(int all) { return new Padding(S(all)); }
     public static Padding Pad(int l, int t, int r, int b) { return new Padding(S(l), S(t), S(r), S(b)); }
@@ -138,6 +164,12 @@ class ControlsForm : Form
     List<string> otherLines = new List<string>();
     public bool SwitchLanguage;
 
+    // What the window built again for another DPI keeps: the edited settings, the status, where it was.
+    public class State { public string Ini, Capture, Reload, Status; public Rectangle Bounds; public int Scroll; }
+    public State Carry;
+    Panel scroll;
+    bool inSizeMove, dpiPending;
+
     static NumericUpDown Num(decimal min, decimal max, decimal inc, int dec)
     {
         return new NumericUpDown { Minimum = min, Maximum = max, Increment = inc, DecimalPlaces = dec, Width = D.S(80) };
@@ -148,7 +180,7 @@ class ControlsForm : Form
         return new TextBox { ReadOnly = true, Width = D.S(190), BackColor = SystemColors.Window, Cursor = Cursors.Hand };
     }
 
-    public ControlsForm()
+    public ControlsForm(State state)
     {
         root = Path.GetDirectoryName(typeof(ControlsForm).Assembly.Location);
         if (!File.Exists(Path.Combine(root, "BloodborneLauncher.exe")) && File.Exists(Path.Combine(root, @"..\..\BloodborneLauncher.exe")))
@@ -159,13 +191,20 @@ class ControlsForm : Form
         L.Init(Path.Combine(configDir, "editor-language.txt"));
 
         Text = L.T("Bloodborne PC — управление (клавиатура и мышь)", "Bloodborne PC — keyboard & mouse controls");
-        Font = new Font("Segoe UI", 9f);
-        StartPosition = FormStartPosition.CenterScreen;
+        Font = D.F(9f);
+        StartPosition = FormStartPosition.Manual;
         ClientSize = D.Sz(720, 760);
         MinimumSize = D.Sz(640, 500);
+        if (state != null) Bounds = state.Bounds;
+        else
+        {
+            var area = Screen.FromPoint(Cursor.Position).WorkingArea;
+            Size = new Size(Math.Min(Width, area.Width), Math.Min(Height, area.Height));
+            Location = new Point(area.Left + (area.Width - Width) / 2, area.Top + (area.Height - Height) / 2);
+        }
         try { Icon = Icon.ExtractAssociatedIcon(Path.Combine(root, "BloodborneLauncher.exe")); } catch { }
 
-        var scroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true, Padding = D.Pad(12, 8, 12, 8) };
+        scroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true, Padding = D.Pad(12, 8, 12, 8) };
         var table = new TableLayoutPanel { ColumnCount = 3, AutoSize = true, Dock = DockStyle.Top };
         table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, D.S(250)));
         table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, D.S(210)));
@@ -265,7 +304,50 @@ class ControlsForm : Form
 
         Controls.Add(scroll);
         Controls.Add(bottom);
-        LoadFiles();
+        if (state == null) { LoadFiles(); return; }
+        LoadText(state.Ini, true);
+        hotCapture.Text = state.Capture; hotReload.Text = state.Reload;
+        SetStatus(state.Status);
+        Shown += (s, e) => { scroll.AutoScrollPosition = new Point(0, D.S(state.Scroll)); };
+    }
+
+    // WM_DPICHANGED: the window takes the size Windows suggests at once and is built again for the
+    // new DPI when the drag to the other monitor ends (or right away if the DPI changed otherwise).
+    protected override void WndProc(ref Message m)
+    {
+        const int WM_DPICHANGED = 0x02E0, WM_ENTERSIZEMOVE = 0x0231, WM_EXITSIZEMOVE = 0x0232;
+        if (m.Msg == WM_ENTERSIZEMOVE) inSizeMove = true;
+        if (m.Msg == WM_EXITSIZEMOVE) { inSizeMove = false; if (dpiPending) RebuildForDpi(); }
+        if (m.Msg == WM_DPICHANGED)
+        {
+            float k = (m.WParam.ToInt64() & 0xFFFF) / 96f;
+            var r = (RECT)System.Runtime.InteropServices.Marshal.PtrToStructure(m.LParam, typeof(RECT));
+            Bounds = new Rectangle(r.Left, r.Top, r.Right - r.Left, r.Bottom - r.Top);
+            if (k != D.K)
+            {
+                scrollAt = (int)Math.Round(-scroll.AutoScrollPosition.Y / D.K);
+                D.K = k;
+                dpiPending = true;
+                if (!inSizeMove) BeginInvoke(new MethodInvoker(RebuildForDpi));
+            }
+            m.Result = IntPtr.Zero;
+            return;
+        }
+        base.WndProc(ref m);
+    }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    struct RECT { public int Left, Top, Right, Bottom; }
+
+    int scrollAt; // the scroll position in 96-DPI pixels when the DPI changed
+
+    void RebuildForDpi()
+    {
+        if (!dpiPending || Carry != null) return;
+        dpiPending = false;
+        Carry = new State { Ini = BuildDefaultIni(), Capture = hotCapture.Text, Reload = hotReload.Text,
+                            Status = status.Text, Bounds = Bounds, Scroll = scrollAt };
+        Close();
     }
 
     void AddHeader(TableLayoutPanel t, params string[] texts)
@@ -275,7 +357,7 @@ class ControlsForm : Form
 
     void AddGroup(TableLayoutPanel t, string text)
     {
-        var l = new Label { Text = text, AutoSize = true, Font = new Font(Font.FontFamily, 10.5f, FontStyle.Bold), ForeColor = Color.FromArgb(140, 20, 20), Margin = D.Pad(3, 14, 3, 4) };
+        var l = new Label { Text = text, AutoSize = true, Font = D.F(10.5f, FontStyle.Bold), ForeColor = Color.FromArgb(140, 20, 20), Margin = D.Pad(3, 14, 3, 4) };
         t.Controls.Add(l);
         t.SetColumnSpan(l, 3);
     }
@@ -459,6 +541,17 @@ class ControlsForm : Form
     void Save()
     {
         Directory.CreateDirectory(configDir);
+        File.WriteAllText(defaultIni, BuildDefaultIni(), new UTF8Encoding(false));
+
+        var lines = File.Exists(globalIni) ? File.ReadAllLines(globalIni).ToList() : new List<string> { "# Loaded alongside default.ini." };
+        SetHotkey(lines, "hotkey_toggle_mouse_to_joystick", hotCapture.Text);
+        SetHotkey(lines, "hotkey_reload_inputs", hotReload.Text);
+        File.WriteAllLines(globalIni, lines, new UTF8Encoding(false));
+        SetStatus(L.T("Сохранено. Если игра запущена — нажмите в ней ", "Saved. If the game is running, press ") + hotReload.Text.ToUpperInvariant() + L.T("", " in it"));
+    }
+
+    string BuildDefaultIni()
+    {
         var sb = new StringBuilder();
         sb.AppendLine("# Bloodborne PC keyboard & mouse bindings (shadPS4 input_config format).");
         sb.AppendLine("# Edited by BloodborneControls.exe; F8 in the game reloads this file.");
@@ -492,13 +585,7 @@ class ControlsForm : Form
             sb.AppendLine("# Controller bindings and other settings");
             foreach (var l in otherLines) sb.AppendLine(l);
         }
-        File.WriteAllText(defaultIni, sb.ToString(), new UTF8Encoding(false));
-
-        var lines = File.Exists(globalIni) ? File.ReadAllLines(globalIni).ToList() : new List<string> { "# Loaded alongside default.ini." };
-        SetHotkey(lines, "hotkey_toggle_mouse_to_joystick", hotCapture.Text);
-        SetHotkey(lines, "hotkey_reload_inputs", hotReload.Text);
-        File.WriteAllLines(globalIni, lines, new UTF8Encoding(false));
-        SetStatus(L.T("Сохранено. Если игра запущена — нажмите в ней ", "Saved. If the game is running, press ") + hotReload.Text.ToUpperInvariant() + L.T("", " in it"));
+        return sb.ToString();
     }
 
     static void SetHotkey(List<string> lines, string name, string key)
@@ -563,7 +650,7 @@ class KeyCapture : Form, IMessageFilter
         KeyPreview = true;
         info = new Label
         {
-            Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter, Font = new Font("Segoe UI", 10.5f),
+            Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter, Font = D.F(10.5f),
             Text = L.T("Нажмите клавишу (Esc тоже), кнопку мыши или прокрутите колесо в этом окне.\n" +
                        "Комбинация: удерживайте Shift / Ctrl / Alt.",
                        "Press a key (Esc too), a mouse button, or scroll the wheel in this window.\n" +
